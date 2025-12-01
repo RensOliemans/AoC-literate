@@ -1,7 +1,7 @@
 (ns advent-of-code.day01
   (:require [advent-of-code.utils :as u]))
 
-(defn- convert-rotation "Converts a rotation string into a number.
+(defn convert-rotation "Converts a rotation string into a number.
   For example, L68 would be -68, and R48 would be 48."
   [rot]
   (let [direction (first rot)
@@ -22,7 +22,7 @@
        (filter zero?)
        count))
 
-(defn- zero-counters
+(defn zero-counters
   "When moving the dial from `from` to `to`, how often does the dial
   point at `0`, during or after the rotation?"
   [from to]
