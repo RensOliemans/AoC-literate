@@ -2,6 +2,23 @@
   (:require [clojure.test :refer :all]
             [advent-of-code.day01 :refer :all]))
 
+(deftest testinput
+  (def inp "L68
+L30
+R48
+L5
+R60
+L55
+L1
+L99
+R14
+L82
+")
+  (testing "Part One"
+    (is (= 3 (part-1 inp))))
+  (testing "Part Two"
+    (is (= 6 (part-2 inp)))))
+
 (deftest convert-rotation-test
   (testing "L"
     (is (= -68 (convert-rotation "L68")))

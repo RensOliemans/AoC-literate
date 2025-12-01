@@ -5,8 +5,7 @@
   For example, L68 would be -68, and R48 would be 48."
   [rot]
   (let [direction (first rot)
-        number (subs rot 1)
-        number (Integer/parseInt number)]
+        number (Integer/parseInt (subs rot 1))]
     (condp = direction
       \L (- number)
       \R number)))
