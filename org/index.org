@@ -1,0 +1,3 @@
+#+title: Advent of Code oplossingen
+
+- [[file:2025.org][2025]]
