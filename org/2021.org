@@ -1,0 +1,243 @@
+:PROPERTIES:
+:header-args:clojure: :results output :exports both :eval never-export
+:END:
+#+TITLE: AoC 2021
+#+AUTHOR: Rens Oliemans
+#+DESCRIPTION: My Advent of Code solutions for 2021
+#+OPTIONS: toc:nil ^:t num:nil
+
+#+begin_src clojure :results none :exports none
+  (ns advent-of-code.2021
+    (:require [advent-of-code.utils :as u]
+              [clojure.string :as str]))
+#+end_src
+
+#+begin_src clojure :results none :exports none
+  (require '[advent-of-code.utils :as u]
+           '[clojure.string :as str])
+#+end_src
+
+* [[https://adventofcode.com/2021/day/1][Day 1: Sonar Sweep]]
+** Part 1
+=(partition 2 1)= groups the numbers into pairs of two numbers.
+#+begin_src clojure
+  (def load-input (u/input-year "2021"))
+
+  (u/part "1"
+    (->> (load-input 1)
+         u/to-lines
+         (map Integer/parseInt)
+         (partition 2 1)
+         (filter (fn [[a b]] (> b a)))
+         count))
+#+end_src
+
+#+RESULTS:
+: Part 1:  1655
+: "Elapsed time: 5.190579 msecs"
+
+** Part 2
+This is really similar, except that we first take a =(partition 3 1)= and take the sum of those. Then we do the same as Part 1.
+
+#+begin_src clojure
+  (defn- product [col]
+    (reduce * 1 col))
+
+  (u/part "2"
+    (->> (load-input 1)
+         u/to-lines
+         (map Integer/parseInt)
+         (partition 3 1)
+         (map #(reduce + %))
+         (partition 2 1)
+         (filter (fn [[a b]] (> b a)))
+         count))
+#+end_src
+
+#+RESULTS:
+: Part 2:  1683
+: "Elapsed time: 18.453982 msecs"
+
+* [[https://adventofcode.com/2021/day/2][Day 2: Dive!]]
+** Part 1
+#+begin_src clojure
+  (u/part "1"
+    (->> (load-input 2)
+         u/to-lines
+         (map #(str/split % #" "))
+         (reduce (fn [[horizontal depth] [direction amount]]
+                   (condp = direction
+                     "forward" [(+ horizontal (parse-long amount)) depth]
+                     "down" [horizontal (+ depth (parse-long amount))]
+                     "up" [horizontal (- depth (parse-long amount))]))
+                 [0 0])
+         (reduce * 1)))
+#+end_src
+
+#+RESULTS:
+: Part 1:  2102357
+: "Elapsed time: 4.45182 msecs"
+
+** Part 2
+Very similar to Part 1, except that we add a third element to our =reduce= element: the aim. Don't forget to remove it at the end with =butlast=, and copy-paste.
+
+#+begin_src clojure
+  (u/part "2"
+    (->> (load-input 2)
+         u/to-lines
+         (map #(str/split % #" "))
+         (reduce (fn [[horizontal depth aim] [direction amount]]
+                   (condp = direction
+                     "forward" [(+ horizontal (parse-long amount))
+                                (+ depth (* aim (parse-long amount)))
+                                aim]
+                     "down" [horizontal depth (+ aim (parse-long amount))]
+                     "up" [horizontal depth (- aim (parse-long amount))]))
+                 [0 0 0])
+         butlast
+         (reduce *)))
+
+#+end_src
+
+#+RESULTS:
+: Part 2:  2101031224
+: "Elapsed time: 3.016529 msecs"
+
+* [[https://adventofcode.com/2021/day/3][Day 3: Binary Diagnostic]]
+Rather than doing very smart binary things, we just loop over the (transposed) input and check whether =1= or =0= is more common. /epsilon/ is binary NOT of the /gamma rate/ (=bit-not= returns a two's complement, so we XOR it with all 1s.
+
+We're going to need the gamma rate and epsilon in Part 2, so let's do that via a function.
+** Part 1
+#+begin_src clojure
+  (defn gammarate-epsilon
+    [bitstrings comp]
+    (let [gammarate-bitstring 
+          (->> bitstrings
+               u/transpose
+               (map (fn [bitstring]
+                      (let [ones (count (filter #(= \1 %) bitstring))
+                            half (/ (count bitstrings) 2)]
+                        (cond
+                          (> ones half) 1
+                          (< ones half) 0
+                          (= ones half) (if comp 1 0)))))
+               (apply str))
+          gammarate (Long/parseLong gammarate-bitstring 2)
+          mask (dec (bit-shift-left 1 (count gammarate-bitstring)))]
+      [gammarate (bit-xor gammarate mask)]))
+
+  (u/part "1"
+    (let [inp (u/to-lines (load-input 3))
+          [gammarate epsilon] (gammarate-epsilon inp true)]
+      (* gammarate epsilon)))
+#+end_src
+
+#+RESULTS:
+: Part 1:  2648450
+: "Elapsed time: 5.806057 msecs"
+
+** Part 2
+This one's introduces trickiness in two ways. First, we have variable tie-breaking rules. Second, we need to recursively find the gamma and epsilon based on the remaining amount of elements in our lists (we cannot just reuse the global gamma and epsilon we computed above).
+
+We keep narrowing down the amount of possible numbers until we have one element left, the tie-breaking is done by =(generate-epsilon)=. Since part one was pretty fast, we're just going to do work twice.
+
+#+begin_src clojure
+  (defn- toBinstring12 [n]
+    (-> n
+        (Integer/toString 2)
+        Long/parseLong
+        (->> (format "%012d"))))
+
+  (defn- find-element-recursive
+    [inp gamma?]
+    (loop [idx 0
+           possible inp]
+      (let [[gamma epsilon] (gammarate-epsilon possible true)
+            val (if gamma? gamma epsilon)
+            bit (nth (toBinstring12 val) idx)]
+        (if (= 1 (count possible))
+          (first possible)
+          (recur (min 11 (inc idx))
+                 (filter #(= bit (nth % idx)) possible))))))
+
+  (u/part "2"
+    (let [inp (u/to-lines (load-input 3))
+          bitstrings (u/transpose inp)
+          oxygen (find-element-recursive inp true)
+          co2 (find-element-recursive inp nil)]
+      (* (Integer/parseInt oxygen 2) (Integer/parseInt co2 2))))
+#+end_src
+
+#+RESULTS:
+: Part 2:  2845944
+: "Elapsed time: 34.696859 msecs"
+
+* [[https://adventofcode.com/2021/day/4][Day 4: Giant Squid]]
+** Part 1
+We define =winning=, which returns a given board if it wins given some selected numbers and =nil= otherwise. We then loop over the boards until we found a winner, after which we compute the answer.
+
+#+begin_src clojure
+  (defn- parse-board
+    "parses a board from input (([0-9]+ ){5}){5} into a seq of length 5,
+    each containing a seq of length 5."
+    [board]
+    (->> board
+         u/to-lines
+         (map u/parse-out-longs)))
+
+  (defn- winning
+    [board numbers]
+    (let [hit? #(every? (set numbers) %)]
+      (when (or (some hit? board)
+                (some hit? (u/transpose board)))
+        board)))
+
+
+  (u/part "1"
+    (let [[numbers & boards] (u/to-blocks (load-input 4))
+          numbers (u/parse-out-longs numbers)
+          boards (map parse-board boards)
+          [winning-board selected]
+          (reduce (fn [selected n]
+                    (if-let [winner (some #(winning % selected) boards)]
+                      (reduced [winner selected])
+                      (conj selected n)))
+                  []
+                  numbers)]
+      (->> winning-board
+           flatten
+           (remove (set selected))
+           (reduce +)
+           (* (last selected)))))
+#+end_src
+
+#+RESULTS:
+: Part 1:  67716
+: "Elapsed time: 104.241589 msecs"
+
+** Part 2
+Similar to part one, except that we keep track of the =non-winners= in our loop. We also keep looping until we only have one board in =one-winners=, after which we compute the result based on this board.
+#+begin_src clojure
+  (u/part "2"
+    (let [[numbers & boards] (u/to-blocks (load-input 4))
+          numbers (u/parse-out-longs numbers)
+          boards (map parse-board boards)
+          [winning-board selected]
+          (loop [selected []
+                 nums numbers
+                 non-winners boards]
+            (if (= 1 (count non-winners))
+              [(first non-winners) selected]
+              (recur (conj selected (first nums))
+                     (rest nums)
+                     (filter #(not (winning % selected)) non-winners))))]
+      (->> winning-board
+               flatten
+               (remove (set selected))
+               (reduce +)
+               (* (last selected)))))
+#+end_src
+
+#+RESULTS:
+: Part 2:  1830
+: "Elapsed time: 465.317547 msecs"
