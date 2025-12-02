@@ -1,0 +1,2944 @@
+#+TITLE: Advent of Code 2024
+#+SUBTITLE: Literate Clojure solutions to programming puzzles.
+#+AUTHOR: Rens Oliemans
+#+DESCRIPTION: My Advent of Code solutions for 2024
+#+LATEX_CLASS_OPTIONS: [a4paper,11pt]
+
+*This is archived.* It will probably not work right now, since you'll have to mess with utils. For [[file:2025.html][2025]] I've moved to a slightly different structure.
+
+Finding the Chief Historian! This program contains my [[https://adventofcode.com/][Advent of Code]] solutions for 2024, which you can find on my [[https://sr.ht/~rensoliemans/AoC/][sourcehut]] and [[https://github.com/RensOliemans/AoC/][GitHub]]. I believe GitHub doesn't show the results of code blocks, which means that viewing it there might leave you a bit confused.
+
+In general, I've added line numbers to code blocks when that code block is part of the solution file. In some cases, I've added some code that explains, clarifies, justifies or otherifies something. Those lines aren't numbered if they aren't necessary to the final solution.
+#+LATEX: \clearpage
+
+* Utils
+:PROPERTIES:
+:header-args: :tangle util.clj
+:header-args:clojure: :session *clojure-util* :results silent
+:UNNUMBERED: t
+:END:
+
+I define some common functions in =aoc.util=, mostly related to parsing the input. The input always comes in a file but also usually has an example input. The former is a file (which we read as a string with =slurp=) and the latter is just a string in the same format. Therefore it's easiest to let the days itself take care of reading the file (since they also have the example input), and just operate on strings here.
+
+#+begin_src clojure -n -r
+  (ns aoc.util
+    (:require [clojure.string :as str])
+    (:require [clojure.data.priority-map :refer [priority-map]]))
+#+end_src
+
+** Files
+#+begin_src clojure +n 1
+  (defn string-as-lines
+    "Outputs the string as a vector, one element per line."
+    [input]
+    (str/split input #"\n"))
+#+end_src
+
+Often the lines contain numbers:
+#+begin_src clojure +n 1
+  (defn string-as-numbers-per-line
+    "Assumes there is a number on each line: we parse it and return a
+    vector, one element per line. Technically each number is parsed with
+    `read-string`, so it isn't just limited to numbers, but I've only
+    tested numbers."
+    [input]
+    (->> (string-as-lines input)
+         (map read-string)))
+#+end_src
+
+or lists of numbers. This was the case in both [[*Day 1][Day 1]] and [[*Day 2][Day 2]], where the input had the following format:
+#+NAME: util-testtable
+#+begin_example
+7 6 4 2 1
+1 2 7 8 9
+9 7 6 2 1
+1 3 2 4 5
+8 6 4 4 1
+1 3 6 7 9
+#+end_example
+Here, we want the whole file to be represented by a vector, where each element is itself a vector of the space-separated numbers on a line.
+#+NAME: num-list-per-line
+#+begin_src clojure +n 1
+  (defn num-list-per-line
+    "Returns a vector of vectors, the outer vector has an element per
+    line, the inner has space-separated elements. "
+    [input]
+    (->> (string-as-lines input)
+         (map #(mapv read-string (str/split % #"\s+")))
+         vec))
+#+end_src
+
+This function, run on the example table seen above, will return the following:
+#+header: :var example=util-testtable
+#+begin_src clojure :results verbatim replace :tangle no :exports both
+  (num-list-per-line example)
+#+end_src
+
+#+RESULTS:
+: [[7 6 4 2 1] [1 2 7 8 9] [9 7 6 2 1] [1 3 2 4 5] [8 6 4 4 1] [1 3 6 7 9]]
+
+Which is fine, but sometimes (see [[*Day 10][Day 10]]) you need to parse numbers without any space in between them. In that case, just map over the characters and call ~(Character/digit c 10)~ on it:
+#+begin_src clojure +n 1
+  (defn adjacent-num-list-per-line
+    "Returns a vector of vectors. The outer vector has an element per
+    line, the inner has an element per character, parsed as int"
+    [input]
+    (->> (string-as-lines input)
+         (map #(mapv (fn [ch] (Character/digit ch 10)) %))
+         vec))
+#+end_src
+
+#+begin_src clojure :results pp replace :tangle no :var example=util-testtable
+  (adjacent-num-list-per-line example)
+#+end_src
+
+#+RESULTS:
+: [[7 -1 6 -1 4 -1 2 -1 1]
+:  [1 -1 2 -1 7 -1 8 -1 9]
+:  [9 -1 7 -1 6 -1 2 -1 1]
+:  [1 -1 3 -1 2 -1 4 -1 5]
+:  [8 -1 6 -1 4 -1 4 -1 1]
+:  [1 -1 3 -1 6 -1 7 -1 9]]
+: 
+
+** Grids
+First, the directions you can move in a grid:
+#+begin_src clojure +n 1
+  (def cardinal-directions
+    [[-1  0]   ; Up
+     [ 0  1]   ; Right
+     [ 1  0]   ; Down
+     [ 0 -1]]) ; Left
+
+  (def diagonal-directions
+    [[-1 -1]   ; NW
+     [-1  1]   ; NR
+     [ 1 -1]   ; SW
+     [ 1  1]]) ; SE
+
+  (def all-directions
+    (concat cardinal-directions diagonal-directions))
+#+end_src
+
+And how you can use them:
+#+begin_src clojure +n 1
+  (defn move [[x y] [x' y']]
+    [(+ x x') (+ y y')])
+#+end_src
+
+#+begin_src clojure :exports both :tangle no :results pp replace
+  (move [4 2] (first cardinal-directions))
+#+end_src
+
+#+RESULTS:
+: [3 2]
+: 
+
+And finding characters in a grid:
+#+begin_src clojure +n 1
+  (defn char-locations [grid x]
+    (mapcat (fn [row string]
+              (keep-indexed (fn [col char] (when (= char x) [row col]))
+                            string))
+            (range)
+            grid))
+#+end_src
+
+For example:
+#+begin_src clojure :exports both :results pp replace :tangle no
+  (def input "MMMSXXMASM
+  MSAMXMSMSA
+  AMXSXMAAMM
+  MSAMASMSMX
+  XMASAMXAMM
+  XXAMMXXAMA
+  SMSMSASXSS
+  SAXAMASAAA
+  MAMMMXMMMM
+  MXMXAXMASX")
+
+  (def grid (string-as-lines input))
+
+  (take 10 (char-locations grid \X))
+#+end_src
+
+#+RESULTS:
+: ([0 4] [0 5] [1 4] [2 2] [2 4] [3 9] [4 0] [4 6] [5 0] [5 1])
+: 
+
+It's [[*Day 18][sometimes]] useful to convert a grid to a graph: a mapping of nodes in a 2d grid to their cardinal neighbours. AoC seems to have the standard notation that a =#= is a wall in the grid, so we don't connect those nodes.
+#+begin_src clojure +n 1
+  (defn grid-to-graph [grid]
+    (letfn [(neighbours [grid node]
+              (->> (map aoc.util/move aoc.util/cardinal-directions (repeat node))
+                   (filter #(= \. (get-in grid %)))
+                   (map #(vector % 1))
+                   (into {})))]
+      (let [coords (for [x (range (count grid))
+                         y (range (count (first grid)))]
+                     [x y])]
+        (->> coords
+             (filter #(not= \# (get-in grid %)))           
+             (map #(vector % (neighbours grid %)))
+             (into {})))))
+#+end_src
+
+** Dijkstra
+I got a lot of inspiration from [[https://github.com/dandorman/dijkstra-clj/blob/01a8907baff42f521553fa1e953fb3da6a1008ca/src/dijkstra/main.clj][dandormans implementation]], especially the way they keep track of the routes, which contains =parent= and =weight= in one.
+#+begin_src clojure +n 1
+  (defn relax [routes node node-weight neighbour neighbour-weight]
+    (let [weight (+ node-weight neighbour-weight)]
+      (cond-> routes
+        (< weight (get-in routes [neighbour :weight] ##Inf))
+        (assoc neighbour {:parent node :weight weight}))))
+
+  (defn dijkstra
+    [graph src]
+    (loop [q (priority-map src 0)
+           routes {src {:parent nil :weight 0}}
+           visited #{src}]
+      (if-let [node (first q)]
+        (let [node (key node)
+              q (pop q)
+              weight (get-in routes [node :weight] 0)
+              neighbours (get graph node)
+              routes (reduce-kv (fn [routes neighbour neighbour-weight]
+                                  (relax routes
+                                         node weight
+                                         neighbour neighbour-weight))
+                                routes
+                                neighbours)
+              neighbours (-> (filter #(not (contains? visited (key %))) neighbours)
+                             (update-vals #(+ % weight)))]
+          (recur (into q neighbours) routes (conj visited node)))
+        routes)))
+#+end_src
+
+Use it like this:
+#+begin_src clojure :tangle no :results pp replace :exports both
+  (let [result (dijkstra {:start {:a 1 :b 1}
+                          :a {:start 1 :c 1}
+                          :b {:start 1 :c 1}
+                          :c {:a 1 :b 1}}
+                         :start)]
+    (:c result))
+#+end_src
+
+#+RESULTS:
+: {:parent :b, :weight 2}
+: 
+
+#+LATEX: \clearpage
+
+* Day 1
+:PROPERTIES:
+:header-args: :tangle src/day1.clj :exports both :results pp
+:header-args:clojure: :session *clojure-1* :var testinput=testinput1
+:END:
+
+** Part 1
+We need to reconcile two lists. We get them in the following form:
+
+#+NAME: testinput1
+#+begin_example
+3   4
+4   3
+2   5
+1   3
+3   9
+3   3
+#+end_example
+And our goal is to find the "distance" between the two lists.
+#+begin_quote
+To find the total distance between the left list and the right list, add up the distances between all of the [sorted] pairs you found.
+#+end_quote
+For the example above, the correct answer is *11*.
+
+My strategy is: convert the input to pairs of numbers ([[num-list-per-line][=aoc.util/num-list-per-line=]] takes care of this), transpose them (so we have two lists), sort them, transpose them again (pairs), and take the difference and sum it.
+Makes sense? We need the two tiny helper functions =sum= and =transpose=:
+#+begin_src clojure -n -r :results silent
+  (ns aoc.1)
+#+end_src
+
+#+begin_src clojure +n 1 :results silent
+  (defn sum "Finds the sum of a vector of numbers" [vec]
+    (reduce + vec))
+
+  (defn transpose "Transposes a matrix" [m]
+    (apply mapv vector m))
+
+  (defn p1 [input]
+    (let [input (aoc.util/num-list-per-line input)]
+      (->> input
+           (transpose)
+           (map sort)
+           (transpose)
+           (map #(abs (- (first %) (second %))))
+           (sum))))
+#+end_src
+
+It works for the testinput, fantastic. Now let's open the file and run it on the input.
+The input file for day 1 can be found in the file =inputs/1=.
+
+#+begin_src clojure +n 1 :results pp :cache yes
+  (assert (= 11 (p1 testinput)))
+  (def input (slurp "inputs/1"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[c95abd35b669eeab46680d8e914a02e7e0f23873]:
+: "Elapsed time: 5.296958 msecs"
+: 2057374
+: 
+
+Hurrah! We get a *Gold Star*!
+
+** Part 2
+Now, we need to find a "similarity score" for the two lists:
+#+begin_quote
+Calculate a total similarity score by adding up each number in the left list after multiplying it by the number of times that number appears in the right list.
+#+end_quote
+
+A naive way to do this would be to iterate over the first list, where, for each element, we count how many items in the second list are equal to that element, and multiply the element with the count.
+However, you'd be doing a lot of duplicate counting.
+A faster way to do it is to convert the second (it doesn't really matter which one you pick) list to a map once, with ={element frequency}=.
+Let's use the function =frequencies=!
+
+#+begin_src clojure :tangle no :results verbatim
+  (frequencies (last (transpose (aoc.util/num-list-per-line testinput))))
+#+end_src
+
+#+RESULTS:
+: {4 1, 3 3, 5 1, 9 1}
+: 
+
+Now, we can iterate over the first list (which we get by ~(transpose (numbers input))~), multiply the element itself by the count in =frequencies=, and sum the result.
+
+#+begin_src clojure +n 1 :cache yes
+  (defn p2 [input]
+    (let [input (transpose (aoc.util/num-list-per-line input))
+          one (first input)
+          freqs (frequencies (second input))]
+      (->> one
+           (map #(* % (freqs % 0)))
+           (sum))))
+
+  (assert (= 31 (p2 testinput)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[9281f65d030c8126137d0304aae126bf8329c0fd]:
+: "Elapsed time: 4.619827 msecs"
+: 23177084
+: 
+
+#+LATEX: \clearpage
+
+* Day 2
+:PROPERTIES:
+:header-args: :tangle src/day2.clj :exports both :var testinput=testinput2 :results pp
+:header-args:clojure: :session *clojure-2*
+:END:
+
+** Part 1
+Analysing some unusual data from a nuclear reactor. The data consists of /reports/ separated by lines, each of which is a list of numbers (/levels/), separated by spaces.
+
+#+NAME: testinput2
+#+begin_example
+7 6 4 2 1
+1 2 7 8 9
+9 7 6 2 1
+1 3 2 4 5
+8 6 4 4 1
+1 3 6 7 9
+#+end_example
+
+We need to find out how many reports are *safe*, which is the case if all levels are gradually increasing or decreasing. This is defined as such:
+#+begin_quote
+[A] report only counts as safe if both of the following are true:
+
+ - The levels are either all increasing or all decreasing.
+ - Any two adjacent levels differ by at least one and at most three.
+#+end_quote
+In the example input, there are *2* safe reports—the first and last.
+
+Let's convert all numbers to the difference between the previous number.
+Then, a report is safe is all numbers are of the same sign, and the absolute of the number is between 1 and 3.
+
+Since we're computing the difference between each element and the element before, I want to use =partition=, which does exactly this. Then, we can use =mapv= to compute the difference. For the last element of the testinput:
+#+begin_src clojure -n -r :results silent
+  (ns aoc.2)
+#+end_src
+
+#+begin_src clojure +n 1 :results silent
+  (defn diffs [record]
+    (->> record
+         (partition 2 1)
+         (mapv (fn [[a b]] (- b a)))))
+#+end_src
+test it out:
+#+begin_src clojure :results verbatim
+  (diffs (last (aoc.util/num-list-per-line testinput)))
+#+end_src
+
+#+RESULTS:
+: [2 3 1 2]
+: 
+
+Now just use that to determine whether a record is safe. 
+#+begin_src clojure +n 1 :results silent
+  (defn is-safe? [record]
+    (let [differences (diffs record)]
+      (and (every? #(<= 1 (abs %) 3) differences)
+           (apply = (map pos? differences)))))
+
+  (defn p1 [input]
+    (->> (aoc.util/num-list-per-line input)
+         (filter is-safe?)
+         (count)))
+#+end_src
+
+Recall that the testinput had *2* safe records.
+#+begin_src clojure +n 1 :cache yes
+  (assert (= 2 (p1 testinput)))
+  (def input (slurp "inputs/2"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[c850b07a0a7e5df8355e51ee6e9d466775f54b2c]:
+: "Elapsed time: 16.115067 msecs"
+: 242
+: 
+
+** Part 2
+#+begin_quote
+Now, the same rules apply as before, except if removing a single level from an unsafe report would make it safe, the report instead counts as safe.
+#+end_quote
+First I had a smart idea. Check out [[https://git.sr.ht/~rensoliemans/AoC/commit/e2dcab2f0de76c21477c5e871e029f0282c8fabc][e2dcab2f0de76c21477c5e871e029f0282c8fabc]]. It is much more efficient than the current solution, but much more convoluted and ugly to read. Right now, I just remove each level one by one and check if the record is safe then.
+
+#+begin_src clojure +n 1 :results silent
+  (defn drop-nth [coll n]
+    (keep-indexed #(if (not= %1 n) %2) coll))
+
+  (defn dampened-is-safe? [record]
+    (some is-safe? (map #(drop-nth record %)
+                        (range (count record)))))
+
+  (defn p2 [input]
+    (->> (aoc.util/num-list-per-line input)
+         (filter dampened-is-safe?)
+         (count)))
+#+end_src
+
+#+begin_src clojure +n 1 :cache yes
+  (assert (= 4 (p2 testinput)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[149e7549df95e6aee53e7a123c683bf00ecd5b7f]:
+: "Elapsed time: 53.09667 msecs"
+: 311
+: 
+
+*** Benchmark results
+The [[https://git.sr.ht/~rensoliemans/AoC/commit/e2dcab2f0de76c21477c5e871e029f0282c8fabc][old solution]] took on average =38= milliseconds to execute ~(p2 input)~, and the new solution about =60=. This is worth it, IMO, since the code is /much/ simpler. Next time, first do the easy thing, and then benchmark to see if it needs to be improved!
+#+LATEX: \clearpage
+* Day 3
+:PROPERTIES:
+:header-args: :tangle src/day3.clj :exports both :results pp
+:header-args:clojure: :session *clojure-3*
+:END:
+** Part 1
+We have an input string that contains a lot of characters, for example:
+#+begin_example
+xmul(2,4)%&mul[3,7]!@^do_not_mul(5,5)+mul(32,64]then(mul(11,8)mul(8,5))
+#+end_example
+
+The goal is to extract all substrings that are of the exact form =mul(\d+,\d+)=, and in that case multiply the two numbers together. This is straightforward, I'm not really going to create any helper functions: parse with regex, convert to int, multiply and sum.
+#+begin_src clojure -n -r :results silent
+  (ns aoc.3)
+#+end_src
+
+#+begin_src clojure +n 1 :results silent
+  (defn p1 [input]
+    (let [matches (re-seq #"mul\((\d+),(\d+)\)" input)]
+      (->> matches
+           (map #(list (Integer/parseInt (nth % 1)) (Integer/parseInt (nth % 2))))
+           (map #(apply * %))
+           (reduce +))))
+#+end_src
+
+#+begin_src clojure +n 1 :cache yes
+  (let [input (slurp "inputs/3")]
+    (time (p1 input)))
+#+end_src
+
+#+RESULTS[5a4fbea0e2073afa7629f94241fbb2d1c2dd24ef]:
+: "Elapsed time: 12.06208 msecs"
+: 155955228
+: 
+
+** Part 2
+We get a new example string for Part Two:
+#+begin_example
+xmul(2,4)&mul[3,7]!^don't()_mul(5,5)+mul(32,64](mul(11,8)undo()?mul(8,5))
+#+end_example
+
+This contains the substrings =don't()= and =do()=, which disable and enable =mul()= instructions. I can do fancy clojure things, but Emacs is way too good for this, so let's do it quickly in Elisp. We want to remove everything from the input file that's in between a =don't()= and a =do()= instruction, and then call =(p1)= on this input.
+There are three slightly tricky things about this:
+- The input file has some newlines, and in some cases a =do()= instruction is on a later line
+  than the previous =don't()= instruction.
+- You need to match non-greedy in between a =don't()= and a =do()=.
+- If you call =(replace-regexp)= with just the regex and replacement string, it will move
+  point to the last match. This is easily fixed by adding the fourth and fifth arguments to
+  =replace-regexp=: =START= and =END=.
+
+So, here's some elisp code that does that.
+#+begin_src elisp :results none
+  (with-temp-buffer
+    (insert-file-contents "inputs/3")
+    (replace-regexp "\n" "" nil (point-min) (point-max))
+    (replace-regexp "don't().+?do()" "" nil (point-min) (point-max))
+    (write-region (point-min) (point-max) "inputs/3-enabled"))
+#+end_src
+
+And back to clojure for the now trivial second part.
+#+begin_src clojure +n 1 :cache yes
+  (let [fixed-input (slurp "inputs/3-enabled")]
+    (time (p1 fixed-input)))
+#+end_src
+
+#+RESULTS[53a753aec406eafe53a0cd786c476a8efc5bbcdf]:
+: "Elapsed time: 0.70303 msecs"
+: 100189366
+: 
+
+#+LATEX: \clearpage
+* Day 4
+:PROPERTIES:
+:header-args: :tangle src/day4.clj :exports both :results pp
+:header-args:clojure: :session *clojure-4*
+:END:
+
+** Part 1
+We need to find all instances of =XMAS=, appearing in a text like below, either horizontally, vertically, or diagonally, including written backwards. According to these rules, the example below contains *18* =XMAS=-es.
+
+#+NAME: testinput4
+#+begin_example
+MMMSXXMASM
+MSAMXMSMSA
+AMXSXMAAMM
+MSAMASMSMX
+XMASAMXAMM
+XXAMMXXAMA
+SMSMSASXSS
+SAXAMASAAA
+MAMMMXMMMM
+MXMXAXMASX
+#+end_example
+
+My idea is to search on the letter =X= and use each =X= as a starting point, where we count =XMAS= occurrences in each of the 8 different directions. Let's create a function =count-xmases-at= that counts the number of =XMAS=-es starting from a location. Then simply call that for each =X= found in the grid and sum.
+
+This gives rise to the obvious helper function =is-xmas?=, which takes the =grid=, a =start= coordinate and a =direction=. It returns =true= if ="XMAS"= occurs in the =grid= from =start= in the given =direction=.
+
+#+begin_src clojure -n -r :results silent
+  (ns aoc.4)
+#+end_src
+
+Using the =util= functions in [[*Grids][Util/Grids]], we can traverse the grid like so:
+#+begin_src clojure :tangle no
+  (let [start [4 5]
+        direction (first aoc.util/cardinal-directions)] ; Up
+    ; move up like so
+    (println (aoc.util/move start direction))
+    (let [[x y] start
+          [x' y'] direction]
+      ; or like so
+      (print [(+ x x') (+ y y')])))
+#+end_src
+
+#+RESULTS:
+: [3 5]
+: [3 5]
+: 
+
+Which is really handy! So, let's define the final functions necessary for Part One:
+#+begin_src clojure +n 1 :results silent
+  (defn is-xmas? "Does the grid `grid` contain the string \"XMAS\",
+   starting at `start` and going in `direction`?"
+    [grid start direction]
+    (loop [location start
+           chars (seq "XMAS")]
+      (if (empty? chars)
+        true
+        (if (not= (get-in grid location) (first chars))
+          false
+          (recur (aoc.util/move location direction)
+                 (rest chars))))))
+#+end_src
+
+Now we can tie everything together. =is-xmas?= returns true if the grid contains the word ="XMAS"= in a given =direction=. After we've found all =X= characters, we can count the amount of =XMAS=-es connected to it by counting all =direction= for which =is-xmas?= returns true.
+#+begin_src clojure +n 1 :var example=testinput4 :cache yes
+  (defn count-xmases-at [grid start directions]
+    (count (filter #(is-xmas? grid start %) directions)))
+
+  (defn p1 [input]
+    (let [grid (aoc.util/string-as-lines input)
+          xs (aoc.util/char-locations grid \X)]
+      (->> xs
+           (map #(count-xmases-at grid % aoc.util/all-directions))
+           (reduce +))))
+
+  (assert (= 18 (p1 example)))
+  (def input (slurp "inputs/4"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[4e8d11334543f75370701fd8fedcd0b478bc5e1c]:
+: "Elapsed time: 65.706921 msecs"
+: 2447
+: 
+
+** Part 2
+Ah, it seems the Elf thinks we're idiots because they use letters more literally. We don't need to find the string =XMAS=, we need to find the string =MAS= in an X, like so!
+#+begin_example
+M.S
+.A.
+M.S
+#+end_example
+
+We could have reused the functionality above to search for =MAS=-es, and then only count a =MAS= that has a nice diagonal partner sharing the =A=. However, I found that a bit tricky to reason about, so I've opted to search for all of the =A=-s in the text, and finding =MAS= strings diagonally from that =A=. If there are exactly two =MAS=-es, we know that we got an =X-MAS=.
+
+Instead of =is-xmas?=, we now have =is-mas?=, checking from a =middle= =A= instead of a starting =X=. Note that we're only counting *X*-=MAS=-es, so only use diagonals.
+=is-mas?= is now pretty trivial:
+#+begin_src clojure +n 1 :results silent
+  (defn is-mas? [grid middle direction]
+    (let [opposite-direction (mapv #(* -1 %) direction)]
+      (and (= \M (get-in grid (aoc.util/move middle direction)))
+           (= \S (get-in grid (aoc.util/move middle opposite-direction))))))
+#+end_src
+
+And =count-mases-at= is virtually identical to =count-xmases-at= from Part One.
+#+begin_src clojure +n 1 :var example=testinput4 :cache yes
+  (defn count-mases-at [grid middle directions]
+    (count (filter #(is-mas? grid middle %) directions)))
+
+  (defn p2 [input]
+    (let [grid (aoc.util/string-as-lines input)
+          as (aoc.util/char-locations grid \A)]
+      (->> as
+           (map #(count-mases-at grid % aoc.util/diagonal-directions))
+           (filter #(= % 2))
+           (count))))
+
+  (assert (= 9 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[04e77df28b53bc0380bd43f8d2d00dd515f0c9ac]:
+: "Elapsed time: 39.701527 msecs"
+: 1868
+: 
+
+#+LATEX: \clearpage
+* Day 5
+:PROPERTIES:
+:header-args: :tangle src/day5.clj :exports both :results pp
+:header-args:clojure: :session *clojure-5*
+:END:
+
+** Part 1
+Graphs! We get an input file that looks like this:
+#+name: testinput5
+#+begin_example
+47|53
+97|13
+97|61
+97|47
+75|29
+61|13
+75|53
+29|13
+97|29
+53|29
+61|53
+97|53
+61|29
+47|13
+75|47
+97|75
+47|61
+75|61
+47|29
+75|13
+53|13
+
+75,47,61,53,29
+97,61,53,29,13
+75,29,13
+75,97,47,61,53
+61,13,29
+97,13,75,29,47
+#+end_example
+
+The first part contains required orderings, where =29|13= means that =29= should always come before =13=. The second part contains "updates" that might or might not be correctly sorted. In Part One, we need to take the correctly sorted updates, take the middle number, and sum those. I wonder what the second part will be? Actually, I don't wonder, I'm virtually certain of it so I'm just going to sort them already. If the update is equal to the sorted input, it's sorted and we can solve Part One.
+
+I already alluded to graphs, that's because you can think of this as a +DAG+ Directed Graph. In the case before, =29|13= will lead to a vertex from =29= to =13=. My "graph" will basically be a list of dependencies, but I'll call it a graph because that's cool and it sort of is one. Before we get into the weeds, let's zoom out and think of what we need: the sum of the middle numbers of the sorted updates.
+
+First look at the easy functions, leaving =sort= and =build-dependency-graph= empty for the time being:
+
+#+begin_src clojure -n -r :results silent :var example=testinput5
+  (ns aoc.5
+    (:require [clojure.string :as str]))
+
+  (defn sort [dependency-graph update])
+  (defn build-dependency-graph [orderings])
+
+  (defn sorted? [dependency-graph update]
+    (= update (sort dependency-graph update)))
+
+  (defn middle-num
+    "Finds the middle string in a list of string, and parses it to a
+    number. Assumes the length of the list list is odd."
+    [update]
+    (read-string (nth update (/ (count update) 2))))
+#+end_src
+Now we can write =p1=. Since I expect to need the orderings, updates and dependency-graph later as well, I'll create a small function =parse-input= that extracts these from the puzzle input.
+
+#+begin_src clojure +n 1 :results silent
+  (defn parse-input
+    "Parses an input string and returns three useful objects.
+    The first obj is a list of orderings, strings of type \"A|B\".
+    The second obj is a list of updates, each one a list of strings.
+    The third obj is a dependency graph, a map."
+    [input]
+    (let [[orderings updates] (str/split input #"\n\n")
+          orderings (str/split orderings #"\n")
+          updates (str/split updates #"\n")
+          updates (map #(str/split % #",") updates)
+          dependency-graph (build-dependency-graph orderings)]
+      [orderings updates dependency-graph]))
+
+  (defn p1 [input]
+    (let [[orderings updates dep-graph] (parse-input input)
+          sorted? (partial sorted? dep-graph)]
+      (->> updates
+           (filter sorted?)
+           (map middle-num)
+           (reduce +))))
+#+end_src
+
+Hmm, yes, extremely reasonable, but we haven't yet filled in =build-dependency-graph= and =sort=. =build-dependency-graph= should take as input the =orderings= (a list of strings from the input, separated by =|=), and return a map of the following form:
+#+begin_example
+{"75" ["97"], "13" ["97" "61" "29" "47" "75" "53"], ...}.
+#+end_example
+
+To do so, I'll first create a hash-map of the following form:
+#+begin_example
+{"75" ["97"], "13" ["97"], "13" ["61"], ...},
+#+end_example
+and then merge identical keys with [[https://clojuredocs.org/clojure.core/merge-with][=merge-with=]] and [[https://clojuredocs.org/clojure.core/into][=into=]], creating our desired dependency graph.
+
+#+begin_src clojure +n 1 :results silent
+  (defn build-dependency-graph
+    [orderings]
+    (let [order-pairs (->> orderings
+                           (map #(str/split % #"\|"))
+                           (map #(hash-map (second %), [(first %)])))]
+      (apply (partial merge-with into) order-pairs)))
+#+end_src
+
+Verifying that this next result is correct is left as an exercise for the reader, but let's test it out on the example input:
+#+begin_src clojure :results pp :tangle no :var example=testinput5 :cache yes
+  (let [[orderings _ _] (parse-input example)]
+    (build-dependency-graph orderings))
+#+end_src
+
+#+RESULTS[deac62ea997bfec65119a05ca7c4906241179d37]:
+: {"61" ["97" "47" "75"],
+:  "47" ["97" "75"],
+:  "53" ["47" "75" "61" "97"],
+:  "13" ["97" "61" "29" "47" "75" "53"],
+:  "75" ["97"],
+:  "29" ["75" "97" "53" "61" "47"]}
+: 
+
+And now, ladies and gentleman, the moment you've all been waiting for, =sort=! We need to sort an =update= based on a =dependency-graph=. You can see it below, but how it works:
+1. It creates a =graph=: a subset of =dep-graph=, /limited to the items local to the current/
+   =update=. It starts with an empty map ={}=, and then for each =item= in =update=, adds the
+   elements in the =dependency-graph= that depend on =item=. =graph= ends up as a map with key
+   a number, and value a set of the dependencies.
+
+   Limiting the dependency graph to be local only to the current =update= gives us a
+   tremendous advantage: we can sort the items based on the number of dependencies each item
+   has.
+2. Sort the items in =update= by their amount of dependencies.
+
+#+begin_src clojure +n 1 :results silent
+  (defn sort
+    "Sort a list of strings based on a dependency map.
+     The map defines which elements should come after others."
+    [dep-graph update]
+    (let [graph (reduce (fn [acc item]
+                          (assoc acc item 
+                                 (set (get dep-graph item []))))
+                        {} update)
+          local-deps (fn [deps] (filter #(contains? (set update) %) deps))]
+      (vec (sort-by (fn [item]
+                      (let [deps (get dep-graph item [])]
+                        (count (local-deps deps))))
+                    update))))
+#+end_src
+
+Now we got everything, ain't we?
+#+begin_src clojure +n 1 :var example=testinput5 :cache yes
+  (assert (= 143 (p1 example)))
+  (def input (slurp "inputs/5"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[fd264eac729fdfdf136e9ff2796d50cdebc57275]:
+: "Elapsed time: 957.383223 msecs"
+: 4637
+: 
+
+yes
+
+*** Optimization
+Instead of doing the filtering in =p1= like above, we can do it like so:
+#+begin_src clojure :tangle no :results silent
+  (defn p1 [input]
+    (let [[orderings updates dep-graph] (parse-input input)
+          sorted? (partial sorted? dep-graph)]
+      (->> updates
+           (pmap #(list % (sorted? %)))
+           (filter last)
+           (pmap first)
+           (pmap middle-num)
+           (reduce +))))
+#+end_src
+
+This is a bit uglier, but it does make it about 3 times as fast:
+#+begin_src clojure :tangle no :cache yes
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[024071c131bc53b628bda2a154f928c7c22e8fcf]:
+: "Elapsed time: 321.296271 msecs"
+: 4637
+: 
+
+** Part 2
+Surprise surprise, we need to sort the incorrect updates! We need to take the sum of the middle numbers of only the /incorrect/ updates. Our prescience is immeasurable. 
+#+begin_src clojure +n 1 :results silent
+  (defn p2 [input]
+    (let [[orderings updates deps] (parse-input input)
+          is-sorted? (partial sorted? deps)
+          sort (partial sort deps)]
+      (->> updates
+           (filter #(not (is-sorted? %)))
+           (pmap sort)
+           (pmap middle-num)
+           (reduce +))))
+#+end_src
+
+#+begin_src clojure +n 1 :var example=testinput5 :cache yes
+  (assert (= 123 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[7a1e3c1ac66b97b9ce04130b770e0a82b303ed3b]:
+: "Elapsed time: 1151.020532 msecs"
+: 6370
+: 
+
+*** Same optimization
+Again, first do the sorting in parallel, save that alongside the unsorted list, filter the ones that differ, and then do the rest.
+#+begin_src clojure :tangle no :results silent
+  (defn p2 [input]
+  (let [[orderings updates deps] (parse-input input)
+        is-sorted? (partial sorted? deps)
+        sort (partial sort deps)]
+    (->> updates
+         (pmap #(list % (sort %)))
+         (filter #(not= (first %) (last %)))
+         (pmap last)
+         (pmap middle-num)
+         (reduce +))))
+#+end_src
+
+#+begin_src clojure :var example=testinput5 :cache yes
+  (assert (= 123 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[7a1e3c1ac66b97b9ce04130b770e0a82b303ed3b]:
+: "Elapsed time: 312.860191 msecs"
+: 6370
+: 
+
+Nice!
+
+#+LATEX: \clearpage
+* Day 6
+:PROPERTIES:
+:header-args: :tangle src/day6.clj :exports both
+:header-args:clojure: :session *clojure-6* :results silent
+:END:
+
+** Part 1
+
+We get a grid again, now representing a map. It looks like this:
+#+name: testinput6
+#+begin_example
+....#.....
+.........#
+..........
+..#.......
+.......#..
+..........
+.#..^.....
+........#.
+#.........
+......#...
+#+end_example
+
+The =^= represents the starting location of our guard, and they start by going /up/. A =#= is an obstacle, and will force the guard to move direction, turning 90° clockwise. Our goal is to find out how many distinct places the guard has entered by the time he leaves the puzzle.
+
+If you replace entered places by =X=, you'd get the following output, with *41* distinct places:
+#+begin_example
+....#.....
+....XXXXX#
+....X...X.
+..#.X...X.
+..XXXXX#X.
+..X.X.X.X.
+.#XXXXXXX.
+.XXXXXXX#.
+#XXXXXXX..
+......#X..
+#+end_example
+
+Turning clockwise means that we only use the four directions in =aoc.util/cardinal-directions= (see [[*Grids][Util/Grids]]).
+#+begin_src clojure -n -r
+  (ns aoc.6)
+#+end_src
+
+Our function will simply compute the route the guard takes as a vector of coordinates, and count the distinct elements of said vector:
+#+begin_src clojure +n 1
+  (defn guard-route
+    "Takes a `grid` as input returns a vector of 2d coordinates: the route
+    of the guard, starting at `start` and turning clockwise at \"#\"
+    characters. "
+    [grid start])
+
+  (defn p1 [input]
+    (let [grid (aoc.util/string-as-lines input)
+          start (first (aoc.util/char-locations grid \^))
+          route (guard-route grid start)]
+      (count (distinct route))))
+#+end_src
+
+As for =guard-route=, we loop through the grid, where each iteration of the loop is a move: go to the next location given some direction, or change direction, building a =route= along the way. We replace the =^= character with a =.= after determining the start so that we only have two cases to deal with, =.= and =#=. We can reuse the =char-locations= formula from [[*Day 4][Day 4]] (which gives us a list of coordinates where a certain character can be found) to find our starting location.
+#+begin_src clojure +n 1
+  (defn replace-char
+    [grid [x y] new-char]
+    (update grid x
+            #(str (subs % 0 y)
+                  new-char
+                  (subs % (inc y)))))
+
+  (defn guard-route [grid start]
+    (let [size (count grid)
+          grid (replace-char grid start \.)]
+      (loop [location start
+             directions (cycle aoc.util/cardinal-directions)
+             route []]
+        (let [[x y] location
+              [x' y'] (first directions)
+              next-location [(+ x x') (+ y y')]
+              next-object (get-in grid next-location)
+              route (conj route location)]
+          (condp = next-object
+            nil route
+            \. (recur next-location
+                      directions
+                      route)
+            \# (recur location
+                      (next directions)
+                      route))))))
+#+end_src
+
+Perhaps this is a little too imperative, but I'm fine with it.
+
+#+begin_src clojure +n 1 :results pp replace :var example=testinput6 :cache yes
+  (assert (= 41 (p1 example)))
+  (def input (slurp "inputs/6"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[509edc8f321d7351420a5e3c53533ae5c52f4eaf]:
+: "Elapsed time: 15.44612 msecs"
+: 5208
+: 
+
+** Part 2
+It's of course possible that the guard enters a loop, but fortunately that didn't occur in the input we were given. Part Two is concerned with /creating/ loops by adding obstacles. Specifically, /how many loops can we create by adding just a single obstacle?/
+
+I'm afraid that I'll have to create a very similar function to =guard-route=, except that now we keep track of the places we've been before. If we ever enter the same location while going in the same direction, we know we've entered a loop and can exit immediately. In that case, let's return =true= and name the function =route-has-loop?=. Since we're exiting earlier and I don't want to create cycle-detection, I'm not reusing the function from Part One. In python I'd use a generator, but I haven't figured out =lazy-seq= yet in clojure.
+
+I can't think of a way to do this intelligently, but at least one insight is that you don't have to consider /all/ cases: you only have to add obstacles on parts of the original route; adding them elsewhere will have no effect.
+
+#+begin_src clojure +n 1
+  (defn route-has-loop? [grid start])
+
+  (defn p2 [input]
+    (let [grid (aoc.util/string-as-lines input)
+          start (first (aoc.util/char-locations grid \^))
+          route (disj (set (guard-route grid start)) start)]
+      (->> route
+           (pmap (fn [new-obstacle]
+                   (route-has-loop? (replace-char grid new-obstacle \#) start)))
+           (filter true?)
+           (count))))
+#+end_src
+
+=route-has-loop?= is virtually identical to =guard-route=, except that we keep track of the =visited= set (keeping track of visited =[location direction]= pairs), and that we return =true= or =false= instead of the route.
+
+#+begin_src clojure +n 1
+  (defn route-has-loop? [grid start]
+    (let [size (count grid)
+          grid (replace-char grid start \.)]
+      (loop [location start
+             directions (cycle aoc.util/cardinal-directions)
+             visited #{}]
+        (let [[x y] location
+              [x' y'] (first directions)
+              next-location [(+ x x') (+ y y')]
+              next-object (get-in grid next-location)
+              pair [next-location [x' y']]]
+          (if (contains? visited pair)
+            true ;; we have a loop!
+            (condp = next-object
+              nil false ;; we exited the puzzle
+              \. (recur next-location
+                        directions
+                        visited)
+              \# (recur location
+                        (next directions)
+                        (conj visited pair))))))))
+#+end_src
+
+On my laptop, this takes about 20 seconds to run on a single thread, but by default uses all of the threads (just by changing =map= into =pmap=, how freaking awesome is that!)
+
+#+begin_src clojure +n 1 :results replace pp :var example=testinput6 :cache yes
+  (assert (= 6 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[2b9fa6fd5cff40de63dab75a290db770f4b4ade4]:
+: "Elapsed time: 6011.385025 msecs"
+: 1972
+: 
+
+*** Timing of different methods
+The following table shows a short overview of the results of ~(time (p2 input))~ (it's too slow for ~(crit/quick-bench)~) with some different variants:
+| Method                     | time |
+|----------------------------+------|
+| Set - always add & check   | 9s   |
+| Set - only add on obstacle | 6s   |
+| Set - only check on north  | 5.5  |
+| Counter (7000)             | 4s   |
+
+**** =set= methods.
+These methods refer to keeping track of a =set= of visited =(node, direction)= pairs. If we've seen one before, we must be in a loop. My original implementation was /Set - always add & check/: add /every/ location we visit to the =visited= set and check if we've seen it before. That turned out to be the slowest one—my code spent about 10% of its time hashing entries. One step faster is /Set - only add on obstacle/, which only adds an element to the set when we visit an obstacle.
+
+The fastest =set=-related method (though only slightly) was /Set - only check on north/, and this only checks if the current =(node, direction)=-pair is in =visited= if =direction == North=. This was counterintuitive for me since that meant it was actually doing some extra work: it might be traversing the current path for up to 3 extra obstacles compared to the previous one. However, the hashing was apparently so expensive compared to traversing the grid that this was still a hair faster.
+
+Since this was only slightly faster but made the code a bit convoluted and difficult to understand ("why are we only checking if we've been here if we're heading North right now?"), I opted for the second method.
+
+**** =Counter=.
+This is kind of a hack, but it's faster than the =set=-methods. Instead of a =visited= set, we keep track of a =counter= of nodes we've visited. Once we reach 7000, we assume we're in a loop and exit. 6500 also worked for me, but that might be too input-dependent.
+
+Still, any arbitrary number fails for some input, so I've opted to not do this.
+
+#+LATEX: \clearpage
+* Day 7
+:PROPERTIES:
+:header-args: :tangle src/day7.clj :exports both
+:header-args:clojure: :session *clojure-7* :results silent
+:END:
+
+** Part 1
+The elephants stole our operators! We had a list of equations, but they stole the operators between the numbers. We get an input where each line represents a single equation, which may be correct. We have to determine whether the equation can be correct, if we limit ourselves to =+= and =*=. In this example:
+
+#+name: testinput7
+#+begin_example
+190: 10 19
+3267: 81 40 27
+83: 17 5
+156: 15 6
+7290: 6 8 6 15
+161011: 16 10 13
+192: 17 8 14
+21037: 9 7 18 13
+292: 11 6 16 20
+#+end_example
+only three of the equations can be made true, and their results sum up to *3749*---that is our goal.
+
+#+begin_src clojure -n -r
+  (ns aoc.7 (:require [clojure.string :as str]))
+#+end_src
+
+Again we get a familiar pattern: =map=, =filter=, =reduce=.
+#+begin_src clojure +n 1
+  (defn is-correct? [equation])
+
+  (defn parse-equations [input]
+    (let [lines (str/split input #"\n")
+          equations (map #(str/split % #": ") lines)]
+      (map (fn [[lhs rhs]]
+             [(read-string lhs) (vec (map read-string (str/split rhs #" ")))])
+           equations)))
+
+  (defn p1 [input]
+    (->> input
+         (parse-equations)
+         (filter is-correct?)
+         (map first)
+         (reduce +)))
+#+end_src
+
+#+begin_src clojure :var example=testinput7 :results replace pp
+  (parse-equations example)
+#+end_src
+
+#+RESULTS:
+#+begin_example
+([190 [10 19]]
+ [3267 [81 40 27]]
+ [83 [17 5]]
+ [156 [15 6]]
+ [7290 [6 8 6 15]]
+ [161011 [16 10 13]]
+ [192 [17 8 14]]
+ [21037 [9 7 18 13]]
+ [292 [11 6 16 20]])
+
+#+end_example
+
+Now the banger =is-correct?=. There are ~800 equations, the longest one has 12 numbers to add or multiply, so 2048 possible operations to check out. I think brute-forcing is pretty viable.
+
+#+begin_src clojure +n 1
+  (defn possible-ops
+    [x y]
+    [(* x y)
+     (+ x y)])
+
+  (defn equation-possibilities
+    [target nums]
+    (->> (range 1 (count nums))
+         (reduce (fn [possible-results idx]
+                   (->> possible-results
+                        (mapcat (fn [result]
+                                  (possible-ops result (nth nums idx))))))
+                 [(first nums)])))
+
+  (defn is-correct? [equation]
+    (let [[result numbers] equation
+          targets (equation-possibilities result numbers)]
+      (some #(= % result) targets)))
+#+end_src
+
+#+begin_src clojure +n 1 :var example=testinput7 :results replace pp :cache yes
+  (assert (= 3749 (p1 example)))
+  (def input (slurp "inputs/7"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[b1ed02ab0c4ce10ad8dd1a62bde4bee00974c2a1]:
+: "Elapsed time: 158.039096 msecs"
+: 12839601725877
+: 
+
+** Part 2
+Now this is an elegant Part Two.
+#+begin_src clojure +n 1 :var example=testinput7 :results replace pp :cache yes
+  (defn possible-ops
+    [x y]
+    [(* x y)
+     (+ x y)
+     (Long/parseLong (str x y))])
+
+  (assert (= 11387 (p1 example)))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[9316547ade2cd71420284b365db704dd43e5f7b5]:
+: "Elapsed time: 5462.497567 msecs"
+: 149956401519484
+: 
+
+** Optimization
+There is a nice way to optimize this. Since this one actually takes quite long (Part One takes about 150ms, Part Two around 5-6s), I might end up doing this at some time, but the trick is that you don't need to multiply the last two numbers together if the equation target isn't divisible by the last number. That frees up half of the possible combinations, and you can of course do this for the second-to-last number as well, et cetera. It's probably nice to reverse the operation list for this.
+
+For Part Two, you can optimize the =||= operation by skipping it if the target number doesn't have the final number as suffix.
+
+#+LATEX: \clearpage
+* Day 8
+:PROPERTIES:
+:header-args: :tangle src/day8.clj :exports both
+:header-args:clojure: :session *clojure-8*
+:END:
+
+** Part 1
+We get a grid that looks more or less like this:
+#+name: testinput8
+#+begin_example
+............
+........0...
+.....0......
+.......0....
+....0.......
+......A.....
+............
+............
+........A...
+.........A..
+............
+............
+#+end_example
+
+And we need to find the specific /antinode/. An /antinode/ is defined as
+#+begin_quote
+an antinode occurs at any point that is perfectly in line with two antennas of the same frequency - but only when one of the antennas is twice as far away as the other.
+#+end_quote
+
+For the example above, there are *14* unique antinodes within the bounds of the map. The pseudo-function (correct with some good imagination) is:
+#+name: eq-antinode
+#+begin_center
+\begin{equation}
+\text{antinodes}(a_1, a_2) = \text{distance}(a_1, a_2) \pm [a_1, a_2].
+\end{equation}
+#+end_center
+
+You can see the antinodes marked by =#= here:
+#+begin_example
+......#....#
+...#....0...
+....#0....#.
+..#....0....
+....0....#..
+.#....A.....
+...#........
+#......#....
+........A...
+.........A..
+..........#.
+..........#.
+#+end_example
+
+First, we need to identify all frequencies—all characters that aren't =.= or =\n=.  For each frequency, find all pairs of antennas that have said frequencies, and find the antinodes. Put the locations in a set and count it.
+
+#+begin_src clojure -n -r :results silent
+  (ns aoc.8
+    (:require [clojure.math.combinatorics :as combo]))
+
+  (defn all-antinodes-for-freq-in-grid [grid freq])
+
+  (defn p1 [input]
+    (let [grid (aoc.util/string-as-lines input)
+          freqs (->> input
+                     set
+                     (remove #{\. \newline}))]
+      (->> freqs
+           (mapcat #(all-antinodes-for-freq-in-grid grid %))
+           distinct
+           count)))
+#+end_src
+
+=all-antinodes-for-freq-in-grid= finds all antinodes that are valid within the grid bounds. For that we need two small helper functions, =all-antinodes-for-freq= (which finds all antinodes, possibly out of bounds), and =in-grid?=, whether a coordinate is in a grid. In turn, =all-antinodes-for-freq= find all antinodes for all pairs, and uses the function =antinodes-for-pair= to find the antinodes for a given pair.
+
+#+begin_src clojure +n 1 :results silent
+  (defn- in-grid? [grid [x y]]
+    (and (< -1 x (count grid))
+         (< -1 y (count (first grid)))))
+
+  (defn antinodes-for-pair [[[ay ax] [by bx]]]
+    (let [dx (abs (- ay by))
+          dx-sign (compare by ay)
+          dy (abs (- ax bx))
+          dy-sign (compare bx ax)]
+      [[(- ay (* dx-sign dx)) (- ax (* dy-sign dy))]
+       [(+ by (* dx-sign dx)) (+ bx (* dy-sign dy))]]))
+#+end_src
+
+Okay that function was a bit ugly, but the weird behaviour with the sign was so that you can simply add the difference to the correct parts and be done with it. You see, if you have two locations =a = [1 8]= and =b = [2 5]=, you can compute the absolute difference (=[1 3]=), but you need to /subtract/ =1= from =ay= (since =a= is above =b=), but /add/ =3= to =ax= (since =a= is to the right of =b=). This is the bit of imagination I requested from you above for [[eq-antinode][Equation 1]]. Anyhow, this sign business takes care of that, such that:
+
+#+begin_src clojure :results pp :tangle no
+  (antinodes-for-pair [[1 8] [2 5]])
+#+end_src
+
+#+RESULTS:
+: [[0 11] [3 2]]
+: 
+
+#+begin_src clojure +n 1 :results silent
+  (defn all-antinodes-for-freq [grid freq]
+    (let [indices (aoc.util/char-locations grid freq)
+          pairs (combo/combinations indices 2)]
+      (mapcat antinodes-for-pair pairs)))
+
+  (defn all-antinodes-for-freq-in-grid [grid freq]
+    (let [antinodes (all-antinodes-for-freq grid freq)]
+      (filter (partial in-grid? grid) antinodes)))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput8 :cache yes
+  (assert (= 14 (p1 example)))
+  (def input (slurp "inputs/8"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[24714abeb415bfe2aa5ca57ec4db1e3981503dbb]:
+: "Elapsed time: 41.71457 msecs"
+: 371
+: 
+
+** Part 2
+In Part Two we don't just find two antinodes (at equal distance from both points), but instead we find all antinodes that are in line with any given pair. In order to do this, we follow the same structure:
+- find all antinodes
+- filter those outside of the grid
+- count distinct elements
+
+But now the finding all antinodes is of course slightly different. If we redefine =all-antinodes-for-freq-in-grid= to return the new harmonic antinodes, we can keep =p1= identical.
+
+#+begin_src clojure +n 1 :results silent
+  (defn harmonic-antinodes-for-pair [grid [a b]])
+
+  (defn all-antinodes-for-freq-in-grid [grid freq]
+    (let [indices (aoc.util/char-locations grid freq)
+          pairs (combo/combinations indices 2)]
+      (->> pairs
+           (mapcat #(harmonic-antinodes-for-pair grid %))
+           (filter (partial in-grid? grid)))))
+#+end_src
+
+Alright now =harmonic-antinodes-for-pair= should find /all/ harmonic antinodes for a pair, and we filter the ones that aren't in the grid. However, how should we do this? There's an infinite amount of 'em! There's surely some smart way to compute only the ones that are in the grid, but I'm doing a sort of dumb method:
+- compute the difference between two pairs (for =[[1 8] [2 5]]= that's =[1 -3]=);
+- subtracting that from =a= ~(count grid)~ times.
+- adding that to =a= ~(count grid)~ times.
+
+This way we know for sure that we don't miss anything, but we do know that a lot of what we calculate will fall outside of the grid.
+#+begin_src clojure +n 1 :results silent
+  (defn- dx-dy-pair [[ax ay] [bx by]]
+    (let [[dx dy] [(abs (- ax bx)) (abs (- ay by))]
+          [dx dy] [(* (compare bx ax) dx)
+                   (* (compare by ay) dy)]]
+      [dx dy]))
+
+  (defn harmonic-antinodes-for-pair [grid [a b]]
+    (let [[ax ay] a
+          [bx by] b
+          [dx dy] (dx-dy-pair a b)]
+      (for [n (range (- (count grid)) (count grid))]
+        [(+ ax (* n dx)) (+ ay (* n dy))])))
+#+end_src
+
+Check how it works (and how much wasted work we do) (line goes off page for dramatic effect):
+#+begin_src clojure :tangle no :results verbatim
+  (harmonic-antinodes-for-pair (range 12) [[1 8] [2 5]])
+#+end_src
+
+#+RESULTS:
+: ([-11 44] [-10 41] [-9 38] [-8 35] [-7 32] [-6 29] [-5 26] [-4 23] [-3 20] [-2 17] [-1 14] [0 11] [1 8] [2 5] [3 2] [4 -1] [5 -4] [6 -7] [7 -10] [8 -13] [9 -16] [10 -19] [11 -22] [12 -25])
+
+But, since it's easily fast enough, I don't really care. [[*Day 2][Personal growth!]]
+
+#+begin_src clojure +n 1 :results pp :var example=testinput8 :cache yes
+  (assert (= 34 (p1 example)))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[bb0012f0be51a7c1fb243aadfa544366369d0ea7]:
+: "Elapsed time: 53.923789 msecs"
+: 1229
+: 
+
+#+LATEX: \clearpage
+* TODO Day 9
+:PROPERTIES:
+:header-args: :tangle src/day9.py :exports both
+:header-args:python: :session *python-9*
+:END:
+
+I'm doing today's in python because I failed at clojure.
+
+A /disk map/ is given like below, and we need to rearrange it to remove the empty spaces, and compute a checksum based on the new arrangement.
+
+#+name: testinput9
+#+begin_example
+2333133121414131402
+#+end_example
+
+The digits alternate between indicating the length of a file, and the length of free space. The final goal is to move the rightmost file blocks to the leftmost empty spaces, until that's no longer possible. It's useful to keep track of the empty spaces and file blocks separately, so we build those two by looping over the file input.
+
+#+begin_src python -n -r :results silent
+  def parse_puzzle(puzzle):
+      files = list()
+      freespace = list()
+      for i, elem in enumerate(puzzle.strip()):
+          if i % 2 == 0:
+              files.append([i // 2] * int(elem))
+          if i % 2 == 1:
+              freespace.append(int(elem))
+      freespace.append(0)
+      return [list(a) for a in zip(files, freespace)]
+#+end_src
+
+** Part 1
+We iterate over the input, where for each empty space we find, we move fileblock from the right to the empty space. We keep track of two pointers: where we are at the beginning (where empty spaces might be), and where we are at the end (where we move blocks forward). We do this until the pointers overlap, and the moving logic breaks down into three rules:
+- space size == amount of file blocks :: Move file blocks to empty space, move to next empty
+  space, remove file blocks from end;
+- space size < amount of file blocks :: Move =space= amount of file blocks to empty space,
+  move to next empty space, remove =space= amount of file blocks from end;
+- space size > amount of file blocks :: Move file blocks to empty space, keep pointer at
+  current empty space, decrease empty space size, remove file blocks from end.
+#+begin_src python +n 1 :results silent
+  def defragment(puzzle):
+      diskmap = parse_puzzle(puzzle)
+
+      result = list()
+      j = len(diskmap) - 1
+      i = 0
+      while i < j:
+          group, space = diskmap[i]
+          fileblock, _ = diskmap[j]
+
+          result.extend(group)
+
+          if space == len(fileblock):
+              result.extend(fileblock)
+              i += 1
+              j -= 1
+          elif space < len(fileblock):
+              result.extend([fileblock[0]] * space)
+              diskmap[j][0] = fileblock[:len(fileblock) - space]
+              i += 1
+          elif space > len(fileblock):
+              result.extend(fileblock)
+              diskmap[i][0] = []
+              diskmap[i][1] -= len(fileblock)
+              j -= 1
+
+      result.extend(diskmap[j][0])
+
+      return result
+#+end_src
+
+Finally, we need to compute a checksum: =block_position * file_id=, where =file_id= is the index of the file blocks before moving them.
+#+begin_src python +n 1 :var example=testinput9 :results output :cache yes
+  def checksum(diskmap):
+      result = 0
+      for i, elem in enumerate(diskmap):
+          elem = 0 if elem == '.' else elem
+          result += i * elem
+      return result
+
+  def p1(puzzle):
+      diskmap = defragment(puzzle)
+      return checksum(diskmap)
+
+  with open("inputs/9") as f:
+      contents = f.read()
+
+  assert p1(example) == 1928
+  print(p1(contents))
+#+end_src
+
+#+RESULTS[acbef15f435d35e7b6e60c639945d72cab07ce98]:
+: 6283170117911
+
+** Part 2
+Part Two is slightly different, and I mistakenly thought I properly understood it twice. You have to move /entire/ file blocks, starting from the end of the diskmap and trying to put each fileblock at the leftmost possible space.
+#+begin_src python +n 1 :var example=testinput9 :results output :cache yes
+  def defrag_2(puzzle):
+      diskmap = parse_puzzle(puzzle)
+
+      j = len(diskmap) - 1
+      while j > 1:
+          tomove, innerspace = diskmap[j]
+          for i, (group, space) in enumerate(diskmap[:j]):
+              if len(tomove) <= space:
+                  diskmap[i][1] = 0  # immediately after i
+                  diskmap[j-1][1] += len(tomove) + innerspace  # add room where j was
+                  del diskmap[j]
+                  diskmap.insert(i+1, [tomove, space - len(tomove)])
+                  break
+          j -= 1
+
+      return flatten_diskmap(diskmap)
+
+  def flatten_diskmap(diskmap):
+      result = list()
+      for (group, space) in diskmap:
+          result.extend(group)
+          result.extend(['.'] * space)
+      return result
+
+  def p2(puzzle):
+      diskmap = defrag_2(puzzle)
+      return checksum(diskmap)
+  assert p2(example) == 2858
+  print(p2(contents))
+#+end_src
+
+#+RESULTS[67e1731656ecb211f1232c5ca7f088c258cfee0b]:
+: 9813645302006
+
+#+LATEX: \clearpage
+* Day 10
+:PROPERTIES:
+:header-args: :tangle src/day10.clj :exports both
+:header-args:clojure: :session *clojure-10* :results pp
+:END:
+
+** Part 1
+#+name: testinput10
+#+begin_example
+  89010123
+  78121874
+  87430965
+  96549874
+  45678903
+  32019012
+  01329801
+  10456732
+#+end_example
+
+Each position in the above map is given by a number and represents the /height/ of the map. A /hiking trail/ is a path that starts at height =0=, ends at height =9=, and always increases by a height of exactly 1 at each step. A /trailhead/ is any position that starts one or more hiking trails. A trailhead's /score/ is the number of 9-height positions reachable from that trailhead.
+
+The example above has 9 trailheads, which have scores of 5, 6, 5, 3, 1, 3, 5, 3 and 5, summing to *36*.
+
+#+begin_src clojure -n 1 :results silent
+  (ns aoc.10)
+#+end_src
+
+#+begin_src clojure +n 1 :results silent
+  (defn trailhead-routes [grid trailhead])
+
+  (defn trail-routes [grid]
+    (let [trailheads (aoc.util/char-locations grid 0)]
+      (map #(trailhead-routes grid %) trailheads)))
+
+  (defn p1 [input]
+    (let [routes (trail-routes (aoc.util/adjacent-num-list-per-line input))]
+      (->> routes
+           (map distinct)
+           (map count)
+           (reduce +))))
+#+end_src
+
+=trailhead-routes= gives us the 9s we can reach from a =trailhead=, duplicated if they are reachable via multiple paths. We traverse the =position='s neighbours and filter the ones that are 1 step higher. From these neighbours, we call the function again. When we are at height 8, we don't traverse further but instead return the amount of 9's next to us.
+
+#+begin_src clojure +n 1 :results silent
+  (defn trailhead-routes
+    [grid position]
+    (let [height (get-in grid position)
+          higher-neighbours
+          (->> aoc.util/cardinal-directions
+               (map (partial aoc.util/move position)) ;; all neighbours
+               (filter (fn [pos] (= (inc height)      ;; higher neighbours
+                                    (get-in grid pos)))))]
+      (if (= 8 height)
+        higher-neighbours
+        (mapcat #(trailhead-routes grid %) higher-neighbours))))
+#+end_src
+
+As an example, see what end spaces you can reach from the trailhead at =[4 6]=:
+#+begin_src clojure :var example=testinput10 :tangle no
+  (let [grid (aoc.util/adjacent-num-list-per-line example)]
+    (trailhead-routes grid [4 6]))
+#+end_src
+
+#+RESULTS:
+: ([2 5] [2 5] [4 5] [3 4])
+: 
+
+
+Note that =[2 5]= is duplicated so we need to remove this, hence the =distinct= call.
+
+#+begin_src clojure +n 1 :var example=testinput10 :cache yes
+  (def input (slurp "inputs/10"))
+  (assert (= 36 (p1 example)))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[5b7295667bf0a4138086c930fcc63cc1604fe23d]:
+: "Elapsed time: 28.457049 msecs"
+: 482
+: 
+
+** Part 2
+Foreshadowing is complete! We need to find out many routes begin at a given position, and sum that for each of the starting positions. For the example, the sum is *81*. This means that we just remove the ~(map distinct)~ call and we are done.
+
+#+begin_src clojure +n 1 :var example=testinput10 :cache yes
+  (defn p2 [input]
+    (let [routes (trail-routes (aoc.util/adjacent-num-list-per-line input))]
+      (->> routes
+           (map count)
+           (reduce +))))
+
+  (assert (= 81 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[e4f228b124c435510422be804d92cd9e4c385ce0]:
+: "Elapsed time: 28.731688 msecs"
+: 1094
+: 
+
+#+LATEX: \clearpage
+* Day 11
+:PROPERTIES:
+:header-args: :tangle src/day11.clj :exports both
+:header-args:clojure: :session *clojure-11*
+:END:
+
+** Part 1
+We get a row of stones with numbers on them that changes each time we blink:
+- An engraved =0= will be converted to a =1=;
+- An engraved number with an even amount of digits will be split into two stones;
+- Otherwise, an engraved =n= will be converted to =n·2024=.
+
+After 25 blinks, the two numbers below will have be converted into *55312* stones. This leads itself nicely to recursion, and even though it grows exponentially that way, caching/memoization can take care of that nicely.
+
+#+name: testinput11
+#+begin_example
+125 17
+#+end_example
+
+With some knowledgable lookahead into the future, let's make =p1= variable in the amount of blinks, defaulting to =25=. The input numbers are on a single line, separated by space—we parse them to an int, run =num-stones= on it in parallel, and sum the result.
+#+begin_src clojure -n -r :results silent
+  (ns aoc.11 (:require [clojure.string :as str]))
+
+  (defn num-stones [stone n])
+
+  (defn p1
+    ([input] (p1 input 25))
+    ([input blinks]
+     (let [numbers (str/split input #"\s")]
+       (->> (map read-string numbers)
+            (pmap #(num-stones % blinks))
+            (reduce +)))))
+#+end_src
+
+=num-stones= is a recursive function that's pretty straightforward given the rules above. It computes the amount of stones we get after =n= blinks and a given starting =stone=. We introduce a small function =split-stone= to help us with the second rule:
+#+begin_src clojure +n 1 :results silent
+  (defn split-stone [stone]
+    (let [sstone (str stone)
+          mid (/ (count sstone) 2)]
+      (map Long/parseLong [(subs sstone 0 mid) (subs sstone mid)])))
+
+  (defn num-stones [stone n]
+    (if (= 0 n)
+      1
+      (cond (zero? stone) (num-stones 1 (dec n))
+            (even? (count (str stone)))
+            (let [[l r] (split-stone stone)]
+              (+ (num-stones l (dec n))
+                 (num-stones r (dec n))))
+            :default (num-stones (* 2024 stone) (dec n)))))
+#+end_src
+
+And now let's run it! This is /not/ memoized, meaning that it computes everything all the time. We're in Part One, after all.
+#+begin_src clojure +n 1 :results pp :var example=testinput11 :cache yes
+  (assert (= 55312 (p1 example)))
+  (def input (slurp "inputs/11"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[b6ee91f13f1c35689e054d4ea70e970c65b8b458]:
+: "Elapsed time: 124.957979 msecs"
+: 200446
+: 
+
+** Part 2
+Okay that was decent, but it grows exponentially wrt =blinks=:
+#+begin_src clojure :results output pp :tangle no :cache yes
+  (time (p1 input 25))
+  (time (p1 input 29))
+  (time (p1 input 33))
+#+end_src
+
+#+RESULTS[2a7c1ac856d2a15062ee937f6f3ce2f26b2e46eb]:
+: "Elapsed time: 126.310147 msecs"
+: "Elapsed time: 601.609624 msecs"
+: "Elapsed time: 3127.742377 msecs"
+: 5655557
+: 
+
+And now it just so happens that Part Two is Part One, except for *75 blinks*. This means that the above growth isn't all that feasible. Fortunately, we can use the clojure built-in [[https://clojuredocs.org/clojure.core/memoize][=memoize=]]. Let's also rerun it on Part One to see how fast that can go.
+
+#+begin_src clojure +n 1 :results pp :cache yes
+  (def num-stones (memoize num-stones))
+  (time (p1 input))
+  (time (p1 input 75))
+#+end_src
+
+#+RESULTS[ad47ff673277fa875ad7f6a8b2329c9c30261a7e]:
+: "Elapsed time: 5.958738 msecs"
+: "Elapsed time: 191.842359 msecs"
+: 238317474993392
+: 
+
+#+LATEX: \clearpage
+
+* Day 12
+Haven't done this in literate yet: see [[file:day12.py::import time][day12.py]].
+* Day 13
+:PROPERTIES:
+:header-args: :tangle src/day13.py :exports both
+:header-args:python: :session *python-13*
+:header-args:latex: :exports results
+:END:
+
+** Part 1
+This is our example input:
+#+name: testinput13
+#+begin_example
+Button A: X+94, Y+34
+Button B: X+22, Y+67
+Prize: X=8400, Y=5400
+
+Button A: X+26, Y+66
+Button B: X+67, Y+21
+Prize: X=12748, Y=12176
+
+Button A: X+17, Y+86
+Button B: X+84, Y+37
+Prize: X=7870, Y=6450
+
+Button A: X+69, Y+23
+Button B: X+27, Y+71
+Prize: X=18641, Y=10279
+#+end_example
+
+Which is a set of /machines/ separated by empty lines, with the goal to find {{{math(a)}}} and {{{math(b)}}} such that {{{math(ax + bx = px)}}} and {{{math(ay + by = py)}}}. So, each machine is a system of linear equations which we're have to solve. Let's use the first machine as an example and call the equations {{{math(L1)}}} and {{{math(L2)}}}.
+
+#+begin_src latex
+  \begin{align*}
+    L1 = 94a + 22b & = 8400 \\
+    L2 = 34a + 67b & = 5400
+  \end{align*}
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+\begin{align*}
+  L1 = 94a + 22b & = 8400 \\
+  L2 = 34a + 67b & = 5400
+\end{align*}
+#+end_export
+
+We're going to use some form of [[https://en.wikipedia.org/wiki/Gaussian_elimination][Gaussian elimination]] to solve this. This entails removing {{{math(a)}}} from equation 2, and removing {{{math(b)}}} from equation 1. In this case, removing {{{math(a)}}} from equation 2 is done by performing the update:
+#+begin_src latex
+  $L2 = L2 - \frac{34}{94} \cdot L1$
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+$L2 = L2 - \frac{34}{94} \cdot L1$
+#+end_export
+
+Which gives us this:
+
+#+begin_src latex
+  \begin{align*}
+    L1 = 94a + 22b            & = 8400 \\
+    L2 = 0 + \frac{5550}{94}b & = \frac{222000}{94}
+  \end{align*}
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+\begin{align*}
+  L1 = 94a + 22b            & = 8400 \\
+  L2 = 0 + \frac{5550}{94}b & = \frac{222000}{94}
+\end{align*}
+#+end_export
+
+Which we can simplify (we don't /need/ to, but it makes this easier to follow) by multipling {{{math(L2)}}} by 94:
+#+begin_src latex
+  \begin{align*}
+    L1 = 94a + 22b & = 8400 \\
+    L2 = L1 = 0 + 5550b & = 222000
+  L\end{align*}
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+\begin{align*}
+  L1 = 94a + 22b & = 8400 \\
+  L2 = L1 = 0 + 5550b & = 222000
+L\end{align*}
+#+end_export
+
+Now, let's remove {{{math(b)}}} from equation 1, in this case with this update:
+#+begin_src latex
+  $L1 = L1 - \frac{22}{5550} \cdot L1$
+  \begin{align*}
+    L1 = 94a + 0   & = 7520 \\
+    L2 = 0 + 5550b & = 222000
+  \end{align*}
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+$L1 = L1 - \frac{22}{5550} \cdot L1$
+\begin{align*}
+  L1 = 94a + 0   & = 7520 \\
+  L2 = 0 + 5550b & = 222000
+\end{align*}
+#+end_export
+
+Now that we've isolated the variables we know our solution:
+#+begin_src latex
+  \begin{align*}
+    a & = 80 \\
+    b & = 40
+  \end{align*}
+#+end_src
+
+#+RESULTS:
+#+begin_export latex
+\begin{align*}
+  a & = 80 \\
+  b & = 40
+\end{align*}
+#+end_export
+
+And our final puzzle result is obtained by doing this for all machines where you can find a solution, multiplying {{{math(a)}}} by 3 and {{{math(b)}}} by 1, and summing this for all equations. There is only one caveat, and that is that we're going to run into floating point issues. You could use other number formats, but for efficiency I'm just going to keep it to floats and fix the issue with a somewhat arbtirary epsilon (though this is [[https://randomascii.wordpress.com/2012/02/25/comparing-floating-point-numbers-2012-edition/][hard to do generally]], it'll probably work fine for this input). Let's get coding.
+
+All machines are separated by a newline, so split them on that:
+#+begin_src python -n -r :results silent
+  def p1(puzzle):
+      equations = puzzle.strip().split("\n\n")
+      return sum(price(*parse_machine(eq))
+                 for eq in equations)
+#+end_src
+
+I'm using two functions that I haven't defined yet, =parse_machine= and =price=. I'm splitting the puzzles up in newlines, so I'll get a block of 3 lines that define a /machine/. I want =parse_machines= to return an =Equation=, which is a tranposition of the how we get them line-by-line (see equations above).
+#+begin_src python +n 1 :results silent
+  from collections import namedtuple
+
+  Equation = namedtuple('Equation', ['x', 'y', 'g'])
+
+  def parse_machine(machine: str) -> tuple[Equation]:
+      """ Parses a 'machine' into an Equation.
+      Example machine:
+
+          Button A: X+94, Y+34
+          Button B: X+22, Y+67
+          Prize: X=8400, Y=5400
+      """
+      (ax, ay), (bx, by), (gx, gy) = map(parse_line, machine.split("\n"))
+      return (Equation(ax, bx, gx),
+              Equation(ay, by, gy))
+
+  def parse_line(line: str) -> list[int]:
+      pattern = r"(?:Button|Prize) ?[AB]?: X[+=](\d+), Y[+=](\d+)"
+      return map(int, re.match(pattern, line).groups())
+#+end_src
+
+The =price= of an equation is defined as {{{math(3a + b)}}} if {{{math(a)}}} and {{{math(b)}}} solve the equation, and {{{math(0)}}} otherwise. The puzzle actually says that you must find the /lowest/ price possible, but by looking at the input I found out that all systems of equations actually have a unique solution, so I can freely ignore that red herring.
+
+#+begin_src python +n 1 :results silent
+  def price(one: Equation, two: Equation) -> int:
+      a, b = 0, 0
+      solution = solve(one, two)
+      if solution:
+          a, b = solution
+      return a*3 + b*1
+#+end_src
+
+Now for some high school math. If it doesn't make sense anymore, look at what we did above or read [[https://en.wikipedia.org/wiki/Gaussian_elimination][the wiki page on Gaussian elimination]] and it should.
+#+begin_src python +n 1 :results silent
+  from typing import Optional
+
+  EPSILON = 0.001
+
+  def solve(one: Equation, two: Equation) -> Optional[int]:
+      # Remove x from equation 2
+      factor = two.x / one.x
+      two = Equation(two.x - factor * one.x,  # Always 0
+                     two.y - factor * one.y,
+                     two.g - factor * one.g)
+
+      # Remove y from equation 1
+      factor = one.y / two.y
+      one = Equation(one.x - factor * two.x,  # Just one.x
+                     one.y - factor * two.y,  # Always 0
+                     one.g - factor * two.g)
+
+      # Simplify to forms 'a + 0 = gx' and '0 + b = gy'
+      one = Equation(1, 0, one.g / one.x)
+      two = Equation(0, 1, two.g / two.y)
+
+      if all(abs(round(s) - s) < EPSILON for s in [one.g, two.g]):
+          return round(one.g), round(two.g)
+#+end_src
+
+#+begin_src python +n 1 :var example=testinput13 :results output
+  assert 480 == p1(example)
+  with open("inputs/13") as f:
+      puzzle = f.read()
+  print(p1(puzzle))
+#+end_src
+
+#+RESULTS:
+: 37901
+
+** Part 2
+The prize locations weren't correct: we need to add =100000000= to the =X= and =Y= position of each prize. We can easily alter =parse_machine= and rerun =p1= on the input:
+#+begin_src python +n 1 :results output
+  def parse_machine(machine: str) -> tuple[Equation]:
+      add = 10000000000000
+      (ax, ay), (bx, by), (gx, gy) = map(parse_line, machine.split("\n"))
+      return (Equation(ax, bx, gx + add),
+              Equation(ay, by, gy + add))
+
+  print(p1(puzzle))
+#+end_src
+
+#+RESULTS:
+: 77407675412647
+
+#+LATEX: \clearpage
+* Day 14
+:PROPERTIES:
+:header-args:clojure: :tangle src/day14.clj :exports both 
+:header-args:python: :session *python-14* :tangle src/day14.py :exports both
+:END:
+
+** Part 1
+We have a bunch of robots that are moving in a grid. Each one is given an initial coordinate and a velocity, like so:
+#+name: testinput14
+#+begin_example
+p=0,4 v=3,-3
+p=6,3 v=-1,-3
+p=10,3 v=-1,2
+p=2,0 v=2,-1
+p=0,0 v=1,3
+p=3,0 v=-2,-2
+p=7,6 v=-1,-3
+p=3,0 v=-1,-2
+p=9,3 v=2,3
+p=7,3 v=-1,2
+p=2,4 v=2,-3
+p=9,5 v=-3,-3
+#+end_example
+
+We need to find out where the robots are after =100= /seconds/, assuming a grid of =101x103= - the robots wrap around if they exit the grid. We can just multiply the velocities by =100= and mod them with the width and length.
+
+The solution is found by grouping the elements in four quadrants, and taking the product of the count of robots per quadrant. Taking the input above in mind, let's define =parse-line= which quickly grabs the relevant numbers, and =move-n= as well while we're at it.
+
+#+begin_src clojure -n -r :results silent
+  (ns aoc.14
+    (:require [clojure.string :as str]))
+
+  (defn parse-line [line]
+    (->> (re-matches #"p=(\d+),(\d+) v=(-?\d+),(-?\d+)" line)
+         rest
+         (map read-string)))
+
+  (defn move-n [width length n [x y dx dy]]
+    [(mod (+ x (* n dx)) width)
+     (mod (+ y (* n dy)) length)])
+#+end_src
+
+Now for doing Part One:
+
+#+begin_src clojure +n 1 :results silent
+  (defn quadrant [width length [x y]])
+
+  (def width 101)
+  (def length 103)
+
+  (defn p1
+    ([input] (p1 input 101 103))
+    ([input width length]
+     (let [quadrant (partial quadrant width length)
+           move-n (partial move-n width length)]
+       (->> (str/split input #"\n")
+            (map parse-line)
+            (map #(move-n 100 %))
+            (group-by quadrant)
+            (filter #(some? (first %)))
+            (map last)
+            (map count)
+            (reduce *)))))
+#+end_src
+
+To rehash the operations above in the text: we need to find all robots, move them 100 spaces along the grid, group them into quadrants, count the quadrants and take the product of the counts.
+
+We left =quadrant= empty, the input for =group-by=. We want it to return a vector of size 2, where =[0 0]= means the northwest quadrant, and =[1 1]= the souteast quadrant. The items in the middle shouldn't belong to any quadrant, and we'll not return anything for that - hence the ~(filter #(some? (first %)))~ line above.
+#+begin_src clojure +n 1 :results silent
+  (defn quadrant
+    [width length [x y]]
+    (let [midx (dec (/ (inc width) 2))
+          midy (dec (/ (inc length) 2))]
+      (if-not (or (= x midx) (= y midy))
+        [(int (/ x (inc midx))) (int (/ y (inc midy)))])))
+#+end_src
+
+Let's run it!
+#+begin_src clojure +n 1 :results pp :var example=testinput14
+  (let [width 11
+        length 7]
+    (assert (= 12 (p1 example width length))))
+
+  (def input (slurp "inputs/14"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS:
+: "Elapsed time: 22.91994 msecs"
+: 228410028
+: 
+
+** Part 2
+We need to find out what the first time a /Christmas tree/ appears in the grid. We don't get a definition, so I figured let's print out a boatload of grids. I did so, and found two recurring patterns:
+- A horizontal pattern appeared on step =18= and reappears every =103= steps.
+- A vertical pattern appeared on step =77= and reappears every =101= steps.
+
+If we find out when these appear at the same time, we surely find the christmas tree. So we need to find whole numbers {{{math(x, y)}}} for which {{{math(18 + 103x = 77 + 101y)}}}. In other words, we need to solve the formula {{{math(101y + 59 = 0 \bmod 103.)}}} You can throw it in [[https://www.wolframalpha.com/input?i=nsolve%28101y+%2B+59+mod+103+%3D+0%29][WolframAlpha]] and get a result (take the first natural number), or I can quickly brute-force it.
+
+#+begin_src clojure +n 1
+  (let [x 101 y 103
+        startx 77
+        starty 18]
+    (->> (range y)
+         (filter #(= 0 (mod (+ (* x %) (- startx starty)) y)))
+         first))
+#+end_src
+
+#+RESULTS:
+: 81
+
+#+begin_src clojure +n 1
+  (+ 77 (* 101 81))
+#+end_src
+
+#+RESULTS:
+: 8258
+
+And let's verify that this is indeed correct:
+
+#+begin_src clojure :results output :tangle no
+  (let [ysolution (/ (- 8258 18) 103)]
+    (println ysolution)
+    (println (+ 18 (* 103 ysolution))))
+#+end_src
+
+#+RESULTS:
+: 80
+: 8258
+
+#+LATEX: \clearpage
+* Day 15
+:PROPERTIES:
+:header-args: :tangle src/day15.clj :exports both
+:header-args:clojure: :session *clojure-15*
+:END:
+
+** Part 1
+We get a grid and a list of instructions. They're separated by two newlines, the instructions themselves have newlines as well, but they need to be removed (??). The instructionset is just a list of directions for the robot (=@=) to move. If the robot encounters a box (=O=), it pushes that box and any following blocks, unless there is a wall (=#=) in the way, in which case it ignores the instruction.
+
+#+name: testinput15
+#+begin_example
+##########
+#..O..O.O#
+#......O.#
+#.OO..O.O#
+#..O@..O.#
+#O#..O...#
+#O..O..O.#
+#.OO.O.OO#
+#....O...#
+##########
+
+<vv>^<v^>v>^vv^v>v<>v^v<v<^vv<<<^><<><>>v<vvv<>^v^>^<<<><<v<<<v^vv^v>^
+vvv<<^>^v^^><<>>><>^<<><^vv^^<>vvv<>><^^v>^>vv<>v<<<<v<^v>^<^^>>>^<v<v
+><>vv>v^v^<>><>>>><^^>vv>v<^^^>>v^v^<^^>v^^>v^<^v>v<>>v^v^<v>v^^<^^vv<
+<<v<^>>^^^^>>>v^<>vvv^><v<<<>^^^vv^<vvv>^>v<^^^^v<>^>vvvv><>>v^<<^^^^^
+^><^><>>><>^^<<^^v>>><^<v>^<vv>>v>>>^v><>^v><<<<v>>v<v<v>vvv>^<><<>^><
+^>><>^v<><^vvv<^^<><v<<<<<><^v<<<><<<^^<v<^^^><^>>^<v^><<<^>>^v<v^v<v^
+>^>>^v>vv>^<<^v<>><<><<v<<v><>v<^vv<<<>^^v^>^^>>><<^v>>v^v><^^>>^<>vv^
+<><^^>^^^<><vvvvv^v<v<<>^v<v>v<<^><<><<><<<^^<<<^<<>><<><^^^>^^<>^>v<>
+^^>vv<^v^v<vv>^<><v<^v>^^^>>>^^vvv^>vvv<>>>^<^>>>>>^<<^v>^vvv<>^<><<v>
+v^^>>><<^^<>>^v^<v^vv<>v^<<>^<^v^v><^<<<><<^<v><v<>vv>>v><v^<vv<>v^<<^
+#+end_example
+
+At the end of the instructions, the example above looks like this:
+#+begin_example
+##########
+#.O.O.OOO#
+#........#
+#OO......#
+#OO@.....#
+#O#.....O#
+#O.....OO#
+#O.....OO#
+#OO....OO#
+##########
+#+end_example
+
+After which we have to perform the following calculation: {{{math(100 \cdot x_b + y_b\, \forall b \in \mathcal{B},)}}} where {{{math(\mathcal{B})}}} is the set of Boxes, in the input denoted as =O=. This gives us *10092* for the example input.
+
+We're going to follow the instructions via =follow-instructions=, which just iterates over the instructions until they're empty and calls =move-in-grid= for each one, which returns the updated grid and a new location.
+
+Since we're going to update the grid quite often, I'm not going to store it as a vec of strings, but as a vec of vecs (of characters).
+
+#+begin_src clojure -n -r :results silent
+  (ns aoc.15
+    (:require [clojure.string :as str]))
+
+  (defn parse-puzzle [input]
+    (let [[grid instructions] (str/split input #"\n\n")
+          grid (aoc.util/string-as-lines grid)
+          instructions (-> (str/replace instructions #"\n" "")
+                           (str/trim))]
+      [(mapv vec grid) instructions]))
+
+  (defn move-in-grid [grid location direction])
+
+  (defn follow-instructions
+    ([grid instructions]
+     (let [location (first (aoc.util/char-locations grid \@))]
+       (follow-instructions grid instructions location)))
+
+    ([grid instructions location]
+     (loop [grid grid
+            instructions instructions
+            location location]
+       (if (empty? instructions)
+         grid
+         (let [[grid location] (move-in-grid grid location (first instructions))]
+           (recur grid (drop 1 instructions) location))))))
+
+  (defn compute-gps-coords
+    ([grid] (compute-gps-coords grid \O))
+    ([grid char]
+     (->> (aoc.util/char-locations grid char)
+          (map (fn [[x y]] (+ (* 100 x) y)))
+          (reduce +))))
+
+  (defn p1 [input]
+    (let [[grid instructions] (parse-puzzle input)
+          grid (follow-instructions grid instructions)]
+      (compute-gps-coords grid)))
+#+end_src
+
+=move-in-grid= takes the =grid=, a =location= and a =direction=, and does the following things in order:
+1. Check what items we have to move (this depends on the amount of =O=-s in front of us);
+2. If there's a =#= in the way, don't update the grid or location;
+3. Otherwise, update the grid. The way we do this seems somewhat convoluted but ensures that
+   we don't have to do a lot of grid updates if we have to push many blocks. What we do is:
+   1. Move a =O= to the "block destination". If we're just moving 1 step and there is no =O=
+      we have to move, the destination is also "our destination" and this will be overriden.
+      If there are =n= blocks to push, this moves the next block to the end of that blocklist.
+   2. Replace our position by an empty one (=.=)
+   3. Move our position by one step in the direction.
+
+We use two helper functions:
+- =move=, which returns the target coordinates given a start, direction and =n=;
+- =items-to-move= this computes the amount of blocks we have to move. If there's no block in
+  front of us, that's just the next tile. Otherwise, it's the tiles in the given direction
+  until there's no more blocks.
+
+#+begin_src clojure +n 1 :results silent
+  (defn move
+    ([[x y] direction]
+     (move [x y] direction 1))
+    ([[x y] direction n]
+     (condp = direction
+       \^ [(- x n) y]
+       \> [x (+ y n)]
+       \v [(+ x n) y]
+       \< [x (- y n)])))
+
+  (defn items-to-move [grid location direction]
+    (loop [location (move location direction)
+           items []]
+      (let [it (get-in grid location)
+            items (conj items it)]
+        (condp = it
+          \# items
+          \. items
+          \O (recur (move location direction) items)))))
+
+  (defn move-in-grid
+    "Takes the grid, a start location and a direction to move in, and
+    returns an updated grid and the new location. Does not move if
+    stuck, and updates boxes correctly in the grid when moving."
+    [grid location direction]
+    (let [items (items-to-move grid location direction)]
+      (if (some #(= \# %) items)
+        ;; Stuck
+        [grid location]
+        (let [moveto (move location direction (count items))]
+          [(-> grid
+               (assoc-in moveto \O)
+               (assoc-in location \.)
+               (assoc-in (move location direction) \@))
+           (move location direction)]))))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput15 :cache yes
+  (assert = (10092 (p1 example)))
+  (def input (slurp "inputs/15"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[3c793a7e385f7f0ebfa6c8b3640700862f9d4ede]:
+: "Elapsed time: 77.573369 msecs"
+: 1453699
+: 
+
+** Part 2
+Part Two is concerned with a warehouse that's twice the size: =#= is converted to =##=, =.= to =..=, =@= to =@.=, and =O= to =[]=. Look at this example to see how this impacts us:
+#+begin_example
+##############
+##......##..##
+##...[][]...##
+##....[]....##
+##....@.....##
+##..........##
+##############
+#+end_example
+
+In this case, we cannot push =^=, since one of the boxes touches a wall. The rest of the puzzle stays the same, but this means that we cannot use the same logic to update the grid (pushing a =O= at the end of a stack).
+
+#+begin_src clojure +n 1 :results silent
+  (defn p2 [input]
+    (let [input (-> input
+                    (str/replace #"\#" "##")
+                    (str/replace #"O" "[]")
+                    (str/replace #"\." "..")
+                    (str/replace #"@" "@."))
+          [grid instructions] (parse-puzzle input)
+          grid (follow-instructions grid instructions)]
+      (compute-gps-coords grid \[)))
+#+end_src
+
+This is the correct shell of Part Two, except that our functions =push= and =items-to-move= had Part One things hardcoded. Let's recall what they need to do and redefine them for Part Two.
+
+- =items-to-move= :: Given a location and a direction, it finds the elements in the grid that
+  should be moved. In P1, this was just the next item, except if we have multiple blocks after
+  each other in our direction, in which case we'll have to move all of them.
+
+  The goal is of course the same, but the way of finding these items becomes more complicated
+  in this part. If we are facing east or west, little changes, except that the blocks now take
+  up two spaces in this direction. If we are facing north or south, we will always face one
+  half of the blocks, and we will have to look for other blocks to move in our direction for
+  the other half of the block as well.
+
+- =push= :: Again, if we are facing east or west, nothing changes. Otherwise, we will
+  have to push each block in =items-to-move= in the same way we checked for which ones we'll
+  have to move. I'm afraid that this will get ugly.
+
+Let's focus on east and west first, since that is easiest.
+
+#+begin_src clojure +n 1 :results silent
+  (defn follow-instructions
+    ([grid instructions]
+     (follow-instructions grid instructions (first (aoc.util/char-locations grid \@))))
+    ([grid instructions location]
+     (loop [grid grid
+            instructions instructions
+            location location]
+       (if (empty? instructions)
+         grid
+         (let [direction (first instructions)
+               [grid location]
+               (try [(push grid location direction) (move location direction)]
+                    (catch Exception e [grid location]))]
+           (recur grid (drop 1 instructions) location))))))
+
+  (defn push [grid location direction]
+    (case direction
+      (\^ \v) (push-vertical grid location direction)
+      (\< \>) (push-horizontal grid location direction)))
+
+  (defn push-horizontal [grid location direction]
+    (let [spot (move location direction)
+          nextbox (move location direction 2)]
+      (condp = (get-in grid spot)
+        \] (-> grid
+            (push-horizontal nextbox direction)
+            (move-box (move spot direction) (move spot direction 2)))
+        \[ (-> grid
+            (push-horizontal nextbox direction)
+            (move-box spot (move spot direction)))
+        \# (throw (Exception. "Cannot push through a wall."))
+        grid)))
+
+  (defn move-box [grid from to]
+    (let [[fx fy] from
+          [tx ty] to]
+      (-> grid
+          (assoc-in from \.)
+          (assoc-in [fx (inc fy)] \.)
+          (assoc-in to \[)
+          (assoc-in [tx (inc ty)] \]))))
+
+  (defn push-vertical [grid location direction]
+    (let [spot (move location direction)]
+      (condp = (get-in grid spot)
+        \[ (-> grid
+               (push-vertical spot direction)
+               (push-vertical (move spot \>) direction)
+               (move-box spot (move spot direction)))
+        \] (-> grid
+               (push-vertical spot direction)
+               (push-vertical (move spot \<) direction)
+               (move-box (move spot \<) (move (move spot direction) \<)))
+        \# (throw (Exception. "Cannot push through a wall."))
+        grid)))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput15 :cache yes
+  (assert (= 9021 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[7d4317f2b8295adc6ae8b0c89372719cc9985475]:
+: "Elapsed time: 148.803022 msecs"
+: 1457703
+: 
+
+#+LATEX: \clearpage
+* Day 16
+:PROPERTIES:
+:header-args: :tangle src/day16.clj :exports both
+:header-args:clojure: :session *clojure-16*
+:END:
+
+** Part 1
+Let's traverse some mazes! We get an input that looks like this:
+#+name: testinput16
+#+begin_example
+###############
+#.......#....E#
+#.#.###.#.###.#
+#.....#.#...#.#
+#.###.#####.#.#
+#.#.#.......#.#
+#.#.#####.###.#
+#...........#.#
+###.#.#####.#.#
+#...#.....#.#.#
+#.#.#.###.#.#.#
+#.....#...#.#.#
+#.###.#.#.#.#.#
+#S..#.....#...#
+###############
+#+end_example
+
+And we need to go from =S= to =E=. We start facing east, and each rotation (clock- or counterclockwise) increases our cost by =1000=; each step by =1=. For the example above, the lowest possible score is *7036*.
+
+I thought of using /A*/, but since a trivial heuristic (Manhattan / Manhattan + 1000 per 90° angle) is likely to be way off, it's probably not that much faster than [[https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm#Using_a_priority_queue][Dijkstra]], so let's use that.
+
+#+begin_src clojure -n -r :results silent :var example=testinput16
+  (ns aoc.16
+    (:require [clojure.data.priority-map :refer [priority-map]]))
+
+  (defn dijkstra [grid start])
+
+  (defn paths
+    "Takes a puzzle input, parses it as a grid, and runs dijkstra on the
+    result. Returns what dijkstra returns: a map of {:dist dist :prev
+    prev}."
+    [grid]
+    (let [start (first (aoc.util/char-locations grid \S))]
+      (dijkstra grid start)))
+
+  (defn p1 [grid paths]
+    (let [end (first (aoc.util/char-locations grid \E))
+          path (:dist paths)
+          scores (for [x [0 1 2 3]]
+                   (path {:state end :dir x}))]
+      (apply min scores)))
+#+end_src
+
+This is more or less part one, but for Dijkstra's algorithm. We use the algorithm from [[https://en.wikipedia.org/wiki/Dijkstra%27s_algorithm#Using_a_priority_queue][the wiki page]], modified so that the cost is appropriately computed: 1 for moving forwards, 1000 for turning clock- or counterclockwise. We use a couple of helper functions, let's go through them one by one.
+
+First, Dijkstra itself. Note that we use as state ~{:state start :dir 1}~ here, =start= is a =[x y]= vector, =dir= is a direction-the index of =aoc.utils/cardinal-directions=. The goal of Dijkstra is to end up with two maps: =dist= and =prev=, by using the priority queue =q=. Hence, all helper functions are going to take these as input, and return an updated version of them.
+#+begin_src clojure +n 1 :results silent
+  (defn process-vertex [grid q dist prev])
+
+  (defn dijkstra [grid start]
+    (let [start-state {:state start :dir 1}] ; East
+      (loop [q (priority-map start-state 0)
+             dist {start-state 0}
+             prev {start-state #{}}]
+        (if (empty? q)
+          {:dist dist :prev prev}
+          (let [[q dist prev] (process-vertex grid q dist prev)]
+            (recur q dist prev))))))
+#+end_src
+
+=process-vertex= takes the next vertex from the queue and concatenates the results from =forward-neighbour= and =side-neighbours= to the result. If we find a vertex via a path that is already more expensive than a previously found one, we don't update the maps.
+#+begin_src clojure +n 1 :results silent
+  (defn forward-neighbour [grid q dist prev parent cost])
+  (defn side-neighbours [grid q dist prev parent cost])
+
+  (defn process-vertex [grid q dist prev]
+    (let [[u cost] (peek q)
+          [x y] (:state u)
+          d (:dir u)
+          q (pop q)]
+      (if (< (dist u ##Inf) cost)
+        [q dist prev] ; We already have a cheaper path to node u
+        (let [[q dist prev] (forward-neighbour grid q dist prev u cost)
+              [q dist prev] (side-neighbours grid q dist prev u cost)]
+          [q dist prev]))))
+#+end_src
+
+=forward-neighbour= updates the =q,dist,prev= maps if we find a new cost that is 1 lower than the existing cost. We use =update-states= to update the maps appropriately, since =side-neighbours= is going to do the exact same things.
+
+Note that =update-states= is slightly different than the standard Dijkstra: instead of =prev= being a map mapping a state to a previous state, we map a state to a set of previous states that have the same cost. Doing this makes Part Two automatic.
+#+begin_src clojure +n 1 :results silent
+  (defn update-states [new-state new-cost q dist prev parent]
+    (let [existing-cost (dist new-state ##Inf)]
+      (cond
+        (< new-cost existing-cost)
+        [(assoc q new-state new-cost)
+         (assoc dist new-state new-cost)
+         (assoc prev new-state #{parent})]
+        (= new-cost existing-cost)
+        [q dist
+         (update prev new-state (fnil conj #{}) parent)]
+        :default
+        [q dist prev])))
+
+  (defn is-movable? [grid location]
+    (let [element (get-in grid location)]
+      (cond
+        (nil? element) false
+        (= \# element) false
+        :default true)))
+
+  (defn forward-neighbour [grid q dist prev u cost]
+    (let [[x y] (:state u)
+          d (:dir u)
+          new-loc (aoc.util/move [x y] (aoc.util/cardinal-directions d))
+          new-state {:state new-loc :dir d}
+          new-cost (inc cost)]
+      (if (not (is-movable? grid new-loc))
+        [q dist prev]
+        (update-states new-state new-cost q dist prev u))))
+#+end_src
+
+And =side-neighbours= is very similar, except that the direction changes and =[x y]= don't and that the cost goes =+ 1000=. We use =reduce= to easily make the same change for left (~(mod (dec d) 4)~) and right (~(mod (inc d) 4)~).
+#+begin_src clojure +n 1 :results silent
+  (defn side-neighbours [grid q dist prev u cost]
+    (let [[x y] (:state u)
+          d (:dir u)
+          pc (count prev)]
+      (reduce
+       (fn [[q dist prev] nd]
+         (let [new-state {:state [x y] :dir nd}
+               new-cost (+ cost 1000)]
+           (update-states new-state new-cost q dist prev u)))
+       [q dist prev]
+       [(mod (dec d) 4)
+        (mod (inc d) 4)])))
+#+end_src
+
+Note that we depart slightly from established tradition of calling ~(p1 input)~ and ~(p2 input)~. That is because calling ~(dijkstra)~ is the biggest time burden, and I don't want to do that for both parts.
+
+#+begin_src clojure +n 1 :var example=testinput16 :results pp :cache yes
+  (def exgrid (aoc.util/string-as-lines example))
+  (def expaths (paths exgrid))
+
+  (assert (= 7036 (p1 exgrid expaths)))
+
+  (def input (slurp "inputs/16"))
+  (def grid (aoc.util/string-as-lines input))
+
+  (print "Computing Dijkstra, ")
+  (time (def path (paths grid)))
+
+  (time (p1 grid path))
+#+end_src
+
+#+RESULTS[ba683a8f294746661dd6d88b8fccaccc0123e328]:
+: Computing Dijkstra, "Elapsed time: 1153.071665 msecs"
+: "Elapsed time: 0.240615 msecs"
+: 85420
+: 
+
+** Part 2
+Now we need to find all items that lie on an optimal path. Since we kept track of all of these in =prev=, that is very simple: we just need to reconstruct the paths that can end up at the end state (in any direction), and count the distinct elements on that path.
+#+begin_src clojure +n 1 :results pp :cache yes
+  (defn reconstruct-path [prev state]
+    (let [prev-states (prev state)]
+      (if (empty? prev-states)
+        [[state]]
+        (for [prev-state prev-states
+              path (reconstruct-path prev prev-state)]
+          (conj path state)))))
+
+  (defn p2 [grid paths]
+    (let [end (first (aoc.util/char-locations grid \E))
+          prev (:prev paths)
+          all-paths (for [x [0 1 2 3]]
+                  (reconstruct-path prev {:state end :dir x}))]
+      (->> (flatten all-paths)
+           (map :state)
+           distinct
+           count)))
+
+  (assert (= 45 (p2 exgrid expaths)))
+  (time (p2 grid path))
+#+end_src
+
+#+RESULTS[189443d55fe39f6452928fa77cda2b72dc51db13]:
+: "Elapsed time: 1260.567037 msecs"
+: 492
+: 
+
+#+LATEX: \clearpage
+* Day 17
+:PROPERTIES:
+:header-args: :tangle src/day17.clj :exports both
+:header-args:clojure: :session *clojure-17*
+:END:
+
+** Part 1
+We get to implement a basic computer, with 8 different /operations/ and 3 /registers/. I'll cite the first two here:
+
+#+begin_quote
+The adv instruction (opcode 0) performs division. The numerator is the value in the A register. The denominator is found by raising 2 to the power of the instruction's combo operand. (So, an operand of 2 would divide A by 4 (2^2); an operand of 5 would divide A by 2^B.) The result of the division operation is truncated to an integer and then written to the A register.
+
+The bxl instruction (opcode 1) calculates the bitwise XOR of register B and the instruction's literal operand, then stores the result in register B.
+#+end_quote
+
+You might notice (I didn't at first) that the division is a simple bitshift, that'll come in handy. The testinput looks like this:
+
+#+name: testinput17
+#+begin_example
+Register A: 729
+Register B: 0
+Register C: 0
+
+Program: 0,1,5,4,3,0
+#+end_example
+
+With the program being a list of =operation,operand= codes. There's some magic with the /operand/ going on: some operations take a /literal operand/ (see =bxl= above), and some a /combo operand/ (see =adv= above). The /combo operand/ looks like this:
+#+begin_quote
+- Combo operands 0 through 3 represent literal values 0 through 3.
+- Combo operand 4 represents the value of register A.
+- Combo operand 5 represents the value of register B.
+- Combo operand 6 represents the value of register C.
+- Combo operand 7 is reserved and will not appear in valid programs.
+#+end_quote
+
+A quick look at the testinput and the general input shows us that registers =B= and =C= are always zero, so we can create a function named =computer= that takes as input the value of register =A= and the programlist. It'll be a loop through the operations. It can't be a clean =reduce=, since we have a =jnz= operation that jumps around by modifying the instruction pointer.
+
+As for our puzzle result: we have an =out= operation that outputs a number. The output format of our puzzle should be those numbers joined by a comma. Let's get hacking:
+#+begin_src clojure -n -r :results silent
+  (ns aoc.17
+    (:require [clojure.string :as str]))
+
+  (defn parse-input [puzzle])
+
+  (defn computer [a program])
+
+  (defn p1 [input]
+    (let [[a, program] (parse-input input)
+          output (computer a program)]
+      (str/join "," output)))
+#+end_src
+
+And =computer= is the banger. Check [[https://adventofcode.com/2024/day/17][the puzzle instructions]] for what all operations do. Note that they can be seen as bitshifts rather than divisions. The =combo= map takes care of the combo operator logic.
+
+#+begin_src clojure +n 1 :results silent
+  (defn computer [a program]
+    (loop [i 0
+           a a
+           b 0
+           c 0
+           output []]
+      (if (>= i (count program))
+        output
+        (let [combo {0 0, 1 1, 2 2, 3 3, 4 a, 5 b, 6 c}
+              [opcode op] (nth program i)]
+          (condp = opcode
+            0 (recur (inc i) (bit-shift-right a (combo op)) b c output)
+            1 (recur (inc i) a (bit-xor b op) c output)
+            2 (recur (inc i) a (mod (combo op) 8) c output)
+            3 (recur (if (zero? a) (inc i) op) a b c output)
+            4 (recur (inc i) a (bit-xor b c) c output)
+            5 (recur (inc i) a b c (conj output (mod (combo op) 8)))
+            6 (recur (inc i) a (bit-shift-right a (combo op)) c output)
+            7 (recur (inc i) a b (bit-shift-right a (combo op)) output))))))
+#+end_src
+
+Finally, =parse-input= is perhaps a bit ugly, but since we only care about register =A=, we just look for that and ignore the rest. We output a vector with element 1 being the =A= register, and element 2 is the program vector, which looks like this: =[(0 1) (5 4) (3 0)]=: =(operation operand)=-pairs.
+
+#+begin_src clojure +n 1 :results silent
+  (defn parse-input [puzzle]
+    (let [[registers program] (str/split puzzle #"\n\n")
+          rega (last (re-find #"Register A: (\d+)" registers))
+          program (last (re-find #"Program: ([\d,]+)" program))]
+      [(Integer/parseInt rega)
+       (->> (str/split program #",")
+                       (map read-string)
+                       (partition 2)
+                       vec)]))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput17
+  (assert (= "4,6,3,5,6,3,5,2,1,0" (p1 example)))
+  (def input (slurp "inputs/17"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS:
+: "Elapsed time: 0.367492 msecs"
+: "1,6,7,4,3,0,5,0,6"
+: 
+
+** Part 2
+Now, we need to find out what input register makes the computer return an output that is equal to the program itself. I like it, strange loops vibes. For example, the program below:
+
+#+name: testinput17-2
+#+begin_example
+Register A: 2024
+Register B: 0
+Register C: 0
+
+Program: 0,3,5,4,3,0
+#+end_example
+
+Will output =0,3,5,4,3,0= if the input register is *117440*. We need to find the /lowest register value/ for which the computer outputs its own program. We could brute-force this, but I tried that for a couple of minutes and have a feeling that we're going to have do something more intelligent.
+
+If you take a look at the example input, you'll see that the program does this:
+1. bit-shift =A= left by 3 bits (divide by 8).
+2. output =A % 8=.
+3. if =A > 0=, go back to step 1.
+
+This means that we can try a number, and see what the program outputs. If we initialize =A= to something below =8=, the output is of course =0= (since it's bit-shifted to the left by 3 bits). If =A= is =8=, the output is =[1 0]=. Look for a minute at the code below:
+#+begin_src clojure :results output
+  (defn example-program [a]
+    (str "Register A: " a "
+
+  Program: 0,3,5,4,3,0"))
+
+  (for [x (range 0 208 8)]
+    (println [x (p1 (example-program x))]))
+#+end_src
+
+#+RESULTS:
+#+begin_example
+[0 0]
+[8 1,0]
+[16 2,0]
+[24 3,0]
+[32 4,0]
+[40 5,0]
+[48 6,0]
+[56 7,0]
+[64 0,1,0]
+[72 1,1,0]
+[80 2,1,0]
+[88 3,1,0]
+[96 4,1,0]
+[104 5,1,0]
+[112 6,1,0]
+[120 7,1,0]
+[128 0,2,0]
+[136 1,2,0]
+[144 2,2,0]
+[152 3,2,0]
+[160 4,2,0]
+[168 5,2,0]
+[176 6,2,0]
+[184 7,2,0]
+[192 0,3,0]
+[200 1,3,0]
+#+end_example
+
+Now that's interesting! Looking at the example above, we see that we don't have to try all possible register values, but we can do something more intellingent:
+
+Start with the number =res= (initially zero) and run it in the program. If the program result is not equal to the last element of our target program, increment it by =1= and try again. If it is equal, save =res= and continue with the next element. To do so, bit-shift =res= to the left by 3 bits (or multiply by 8): save =res * 8=. Now do the same for the second-to-last element: try =res * 8= in our program: if not equal: try =res * 8 + 1=, if equal: bit-shift again: save =res * 8 * 8=. Continue until we have our desired =res=.
+
+In our implementation below, we also bitshift =res= if we find our last element. That's actually one shift too many and therefore means that we have to bitshift back once again when we return =res=.
+
+#+begin_src clojure +n 1 :results silent
+  (defn p2 [input]
+    (let [[_ program] (parse-input input)
+          goal (flatten program)]
+      (loop [res 0
+             n 0
+             i 0]
+        (if (>= i (count goal))
+          (bit-shift-right res 3)
+          (let [target (take-last (inc i) goal)
+                current (take (inc i) (computer (+ res n) program))]
+            (if (= target current)
+              (recur (* (+ res n) 8) 0 (inc i))
+              (recur res (inc n) i)))))))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput17-2 :cache yes
+  (assert (= 117440 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[f5ecfd4c32c11981e37fbc6549d3235714c86f0c]:
+: "Elapsed time: 106.573594 msecs"
+: 216148338630253
+: 
+
+#+LATEX: \clearpage
+* Day 18
+:PROPERTIES:
+:header-args: :tangle src/day18.clj :exports both
+:header-args:clojure: :session *clojure-18*
+:END:
+
+** Part 1
+Puzzle input:
+#+name: testinput18
+#+begin_example
+5,4
+4,2
+4,5
+3,0
+2,1
+6,3
+2,4
+1,5
+0,6
+3,3
+2,6
+5,1
+1,2
+5,5
+2,5
+6,5
+1,4
+0,4
+6,4
+1,1
+6,1
+1,0
+0,5
+1,6
+2,0
+#+end_example
+
+The idea is that these are =X,Y= coordinates of walls that fall down in a grid of size =71x71=. We take the first =1024= walls, put them in the grid, and find the shortest path between =[0 0]= and =[70 70]=.
+
+Pretty simple, especially now that we've added a [[*Dijkstra][Dijkstra]] algorithm in Utils. First, let's parse the input and create a grid with walls in the correct spot. When parsing the input, we take care to reverse each element, since the coordinates above are =X,Y=, but we naturally access the grid via =Y,X=.
+
+#+begin_src clojure -n -r :results silent
+  (ns aoc.18
+    (:require [clojure.string :as str]))
+
+  (defn parse-input [input]
+    (->> (str/split input #"\n")
+         (map #(str/split % #","))
+         (map #(map Integer/parseInt %))
+         (map reverse)))
+#+end_src
+
+Creating the grid is rather straightforward: add a =.= everywhere first, add =#= later.
+#+begin_src clojure +n 1 :results silent
+  (defn create-grid [input size steps]
+    (let [grid (vec (repeat size (vec (repeat size \.))))
+          bytes (take steps input)]
+      (reduce (fn [g pos]
+                (assoc-in g pos \#))
+              grid
+              bytes)))
+#+end_src
+
+And =p1= is easy with our new Dijkstra:
+#+begin_src clojure +n 1 :results silent
+  (defn helper-dijkstra [input size steps]
+    (-> input
+        (create-grid size steps)
+        aoc.util/grid-to-graph
+        (aoc.util/dijkstra [0 0])))
+
+  (defn p1 [input size steps]
+    (-> input
+        parse-input
+        (helper-dijkstra size steps)
+        (get [(dec size) (dec size)])
+        :weight))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput18 :cache yes
+  (assert (= 22 (p1 example 7 12)))
+  (def input (slurp "inputs/18"))
+  (time (p1 input 71 1024))
+#+end_src
+
+#+RESULTS[8e2681beb1285a5603eb9da691f0ac3fab3fe7df]:
+: "Elapsed time: 201.257991 msecs"
+: 316
+: 
+
+** Part 2
+We need to find the first element after which we cannot find a route anymore. Binary search is good for this, and I decided to create a generic function that takes as input a sorted list and a predicate; ~(pred i)~ returns a boolean, and our =binarysearchp= returns the first =i= for which it returns =true=.
+
+There's an off-by-one error related to even/odd input lengths which made the result work on the testinput (len 25) and not on the real input (len 3450). I fixed it, and then it worked on the input but not on the testinput. My ugly workaround is that when the list has an even length, it instead returns the index of the found element =- 1=.
+
+#+begin_src clojure +n 1 :results silent
+  (defn binsearchp
+    "Returns the first index `i` in `list` for which `(pred i)` returns
+    true."
+    [list pred]
+    (loop [start 0
+           end (count list)]
+      (if (>= start end)
+        start
+        (let [i (quot (+ start end) 2)]
+          (if (pred i)
+            (recur (inc start) i)
+            (recur i (dec end)))))))
+#+end_src
+
+This is very handy, but we need to think for a second how to use it. ~(p1 input size 1024)~ returned the longest route on the grid after =1024= steps. If we input it for some step =i=, it returns =nil= if there is no such route, and finding that first =i= is the objective of Part Two. So, our predicate should return =true= if ~(p1 input size i)~ returns =nil=, and thus should be ~(fn [i] (nil? (p1 input size i)))~.
+
+#+begin_src clojure +n 1 :results silent
+  (defn p2 [input size]
+    (let [list (parse-input input)
+          pred (fn [i] (nil? (p1 input size i)))
+          idx (if (even? (count list))
+                (binsearchp list pred)
+                (dec (binsearchp list pred)))
+          [y x] (nth list idx)]
+      (str x "," y)))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput18 :cache yes
+  (assert (= "6,1" (p2 example 7)))
+  (time (p2 input 71))
+#+end_src
+
+#+RESULTS[23e10ad5e445325965c8acfde72052a5bf4f82b5]:
+: "Elapsed time: 330.052123 msecs"
+: "45,18"
+: 
+
+We might optimize this: right now we parse the constant input each time we try out a new element. However, I enjoy running =p1= and =p2= with the raw puzzle input, and that means that =p1= will have to do its own parsing. Since it runs comfortably in less than a second I'm fine by it.
+
+#+LATEX: \clearpage
+* Day 19
+:PROPERTIES:
+:header-args: :tangle src/day19.clj :exports both
+:header-args:clojure: :session *clojure-19*
+:END:
+
+** Part 1
+Let's recap for a minute. Our chief objective is to find the Chief Historian because he's necessary for the big Christmas sleigh launch. He has been missing for months, so it might be something serious. His family is purportedly extremely anxious about his life.
+
+We find ourselves on a hot spring island, and we want to visit an onsen! Unfortunately, they won't accept our money, but they do tell us that if we're able to appropriately arrange their towels, we can enter for free! Let's embark on this important journey.
+
+#+name: testinput19
+#+begin_example
+r, wr, b, g, bwu, rb, gb, br
+
+brwrr
+bggr
+gbbr
+rrbgbr
+ubwu
+bwurrg
+brgr
+bbrgwb
+#+end_example
+
+Above is our example puzzle input, starting with a list of towels, and followed by a list of designs. Our objective is to find out how many designs we can create with the given towels.
+
+This lends itself nicely to a recursive solution (given some [[https://clojuredocs.org/clojure.core/memoize][memoization]]), so let's do that. First, the bulk of today: =can-be-made?=:
+
+#+begin_src clojure -n -r :results silent
+  (ns aoc.19
+    (:require [clojure.string :as str]))
+
+  (defn can-be-made? [towels design]
+    (if (empty? design)
+      true
+      (some #(and (str/starts-with? design %)
+                  (can-be-made? towels (subs design (count %))))
+            towels)))
+
+  (def can-be-made? (memoize can-be-made?))
+#+end_src
+
+Quite simple, and this makes the rest of today a piece of cake.
+
+#+begin_src clojure +n 1 :results silent
+  (defn parse-input [input]
+    (let [[towels designs] (str/split input #"\n\n")]
+      [(str/split towels #", ")
+       (str/split designs #"\n")]))
+
+  (defn p1 [input]
+    (let [[towels designs] (parse-input input)]
+      (->> designs
+           (filter #(can-be-made? towels %))
+           count)))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput19 :cache yes
+  (assert (= 6 (p1 example)))
+  (def input (slurp "inputs/19"))
+  (time (p1 input))
+#+end_src
+
+#+RESULTS[e46eac29c4ad79af9f9d76921d5eab506d8e6661]:
+: "Elapsed time: 164.75102 msecs"
+: 330
+: 
+
+** Part 2
+For Part Two, we need to find with /how many possible arrangements/ each design can be created. We use a very similar function, except that we don't have the luxury of returning early when =some= of our towel arrangement already filled up the design.
+
+#+begin_src clojure +n 1 :results silent
+  (defn count-possibilities [towels design]
+    (if (empty? design)
+      1
+      (->> towels
+           (filter #(str/starts-with? design %))
+           (map #(count-possibilities towels (subs design (count %))))
+           (reduce +))))
+
+  (def count-possibilities (memoize count-possibilities))
+
+  (defn p2 [input]
+    (let [[towels designs] (parse-input input)]
+      (->> designs
+           (map #(count-possibilities towels %))
+           (reduce +))))
+#+end_src
+
+#+begin_src clojure +n 1 :results pp :var example=testinput19 :cache yes
+  (assert (= 16 (p2 example)))
+  (time (p2 input))
+#+end_src
+
+#+RESULTS[8a270f549fd4d792b5442f846434d6ee0f3ebca3]:
+: "Elapsed time: 430.049032 msecs"
+: 950763269786650
+: 
+
+#+LATEX: \clearpage

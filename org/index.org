@@ -1,3 +1,4 @@
 #+title: Advent of Code oplossingen
 
 - [[file:2025.html][2025]]
+- [[file:2024.html][2024]]
