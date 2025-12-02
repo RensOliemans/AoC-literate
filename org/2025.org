@@ -1,0 +1,113 @@
+:PROPERTIES:
+:header-args:clojure: :results output :exports both :eval never-export
+:END:
+#+TITLE: AoC 2025
+#+OPTIONS: toc:nil ^:t num:nil
+
+#+begin_src clojure :results none :exports none
+  (ns advent-of-code.2025
+    (:require [advent-of-code.utils :as u]))
+#+end_src
+
+* Day 1
+
+** Part 1
+We convert the input into numbers (=L68= would be =-68=, =R34= would be =34=). For part one we simply compute the entire list of numbers via =(reductions + 50 rotations)= and check how many are zero modulo 100.
+
+#+begin_src clojure
+  (def load-input (u/input-year "2025"))
+
+  (defn convert-rotation "Converts a rotation string into a number.
+    For example, L68 would be -68, and R48 would be 48."
+    [rot]
+    (let [direction (first rot)
+          number (Integer/parseInt (subs rot 1))]
+      (condp = direction
+        \L (- number)
+        \R number)))
+
+  (u/part "1"
+    (->> (load-input 1)
+         u/to-lines
+         (map convert-rotation)
+         (reductions + 50)
+         (map #(mod % 100))
+         (filter zero?)
+         count))
+#+end_src
+
+#+RESULTS:
+: Part 1:  1018
+: "Elapsed time: 5.147599 msecs"
+
+** Part 2
+We now also have to count how often the dial moves /across/ 0. We do this via the function =zero-counters=, which takes two numbers: before and after moving the dial (=from= and =to=). A couple of example movements with the corresponding amount of zeros seen:
+- $105 \rightarrow 301 = 2$
+- $-101 \rightarrow 100 = 3$
+- $-155 \rightarrow -100 = 0$
+- $-9900 \rightarrow -9925 = 0$
+
+Thinking a bit about this, we can divide both =from= and =to= by =100= and take the difference. Whether we take the [[https://en.wikipedia.org/wiki/Floor_division][floor or ceiling]] division depends on whether =from= or =to= is higher. With =zero-counters= done it's straightforward:
+#+begin_src clojure
+  (defn zero-counters
+    "When moving the dial from `from` to `to`, how often does the dial
+    point at `0`, during or after the rotation?"
+    [from to]
+    (let [divver (if (< from to) Math/floorDiv Math/ceilDiv)]
+      (let [a (divver from 100)
+            b (divver to   100)]
+        (Math/abs (- b a)))))
+
+  (u/part "2"
+    (->> (load-input 1)
+         u/to-lines
+         (map convert-rotation)
+         (reductions + 50)
+         (partition 2 1)
+         (map (fn [[x y]] (zero-counters x y)))
+         (reduce +)))
+#+end_src
+
+#+RESULTS:
+: Part 2:  5815
+: "Elapsed time: 124.652598 msecs"
+
+* Day 2
+
+** Part 1
+Regex with backtrace, match a number twice for Part 1
+#+begin_src clojure
+  (defn- to-ranges
+    "Converts todays puzzle input to a seq of float-pairs.
+    For example, \"11-22,95-115\" will be converted to ((11 22) (95
+    115))."
+    [input]
+    (->> input
+         u/to-csvs
+         u/parse-ranges))
+
+  (defn solve
+    [input regexp]
+    (->> input
+         to-ranges
+         (mapcat (fn [[start end]]
+                   (filterv #(re-matches regexp (str %))
+                            (range start (inc end)))))
+         (reduce +)))
+
+  (u/part "1" (solve (load-input 2) #"^(\d+)\1$"))
+#+end_src
+
+#+RESULTS:
+: Part 1:  13108371860
+: "Elapsed time: 880.129492 msecs"
+
+** Part 2
+And simply match it more often for Part 2
+#+begin_src clojure
+  (u/part "2" (solve (load-input 2) #"^(\d+)\1+$"))
+#+end_src
+
+#+RESULTS:
+: Part 2:  22471660255
+: "Elapsed time: 972.409996 msecs"

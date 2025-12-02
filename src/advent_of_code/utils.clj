@@ -12,6 +12,18 @@
   [string]
   (map digits string))
 
+(defmacro part
+  [part & body]
+  `(time
+    (println (format "Part %s: " ~part)
+             ~@body))
+  )
+
+(defn input-year
+  [year]
+  (defn load-input [day]
+    (read-input (format "%s/day%02d.txt" year day))))
+
 (defn read-input
   "Read in the content of the given day-file and return as a blob"
   [day]
