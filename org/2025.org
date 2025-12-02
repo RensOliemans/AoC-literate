@@ -43,7 +43,7 @@ We convert the input into numbers (=L68= would be =-68=, =R34= would be =34=). F
 
 #+RESULTS:
 : Part 1:  1018
-: "Elapsed time: 5.147599 msecs"
+: "Elapsed time: 5.555712 msecs"
 
 ** Part 2
 We now also have to count how often the dial moves /across/ 0. We do this via the function =zero-counters=, which takes two numbers: before and after moving the dial (=from= and =to=). A couple of example movements with the corresponding amount of zeros seen:
@@ -75,7 +75,7 @@ Thinking a bit about this, we can divide both =from= and =to= by =100= and take 
 
 #+RESULTS:
 : Part 2:  5815
-: "Elapsed time: 124.652598 msecs"
+: "Elapsed time: 132.196553 msecs"
 
 * Day 2
 :PROPERTIES:
@@ -98,9 +98,10 @@ Regex with backtrace, match a number twice for Part 1
     [input regexp]
     (->> input
          to-ranges
-         (mapcat (fn [[start end]]
-                   (filterv #(re-matches regexp (str %))
-                            (range start (inc end)))))
+         (pmap (fn [[start end]]
+                 (filterv #(re-matches regexp (str %))
+                          (range start (inc end)))))
+         flatten
          (reduce +)))
 
   (u/part "1" (solve (load-input 2) #"^(\d+)\1$"))
@@ -108,7 +109,7 @@ Regex with backtrace, match a number twice for Part 1
 
 #+RESULTS:
 : Part 1:  13108371860
-: "Elapsed time: 880.129492 msecs"
+: "Elapsed time: 422.718813 msecs"
 
 ** Part 2
 And simply match it more often for Part 2
@@ -118,4 +119,5 @@ And simply match it more often for Part 2
 
 #+RESULTS:
 : Part 2:  22471660255
-: "Elapsed time: 972.409996 msecs"
+: "Elapsed time: 448.995817 msecs"
+
