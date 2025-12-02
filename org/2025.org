@@ -10,6 +10,9 @@
 #+end_src
 
 * Day 1
+:PROPERTIES:
+:CUSTOM_ID: day1
+:END:
 
 ** Part 1
 We convert the input into numbers (=L68= would be =-68=, =R34= would be =34=). For part one we simply compute the entire list of numbers via =(reductions + 50 rotations)= and check how many are zero modulo 100.
@@ -73,6 +76,9 @@ Thinking a bit about this, we can divide both =from= and =to= by =100= and take 
 : "Elapsed time: 124.652598 msecs"
 
 * Day 2
+:PROPERTIES:
+:CUSTOM_ID: day2
+:END:
 
 ** Part 1
 Regex with backtrace, match a number twice for Part 1
