@@ -1,10 +1,9 @@
-#+TITLE: Advent of Code 2024
-#+SUBTITLE: Literate Clojure solutions to programming puzzles.
+#+TITLE: AoC 2024
 #+AUTHOR: Rens Oliemans
 #+DESCRIPTION: My Advent of Code solutions for 2024
 #+LATEX_CLASS_OPTIONS: [a4paper,11pt]
 
-*This is archived.* It will probably not work right now, since you'll have to mess with utils. For [[file:2025.html][2025]] I've moved to a slightly different structure.
+*This is archived.* It will probably not work right now, since the util functions are a bit tricky to use in the same session as the daily functions. For [[file:2025.html][2025]] I've moved to a slightly different structure and have just copied this file for archiving purposes.
 
 Finding the Chief Historian! This program contains my [[https://adventofcode.com/][Advent of Code]] solutions for 2024, which you can find on my [[https://sr.ht/~rensoliemans/AoC/][sourcehut]] and [[https://github.com/RensOliemans/AoC/][GitHub]]. I believe GitHub doesn't show the results of code blocks, which means that viewing it there might leave you a bit confused.
 

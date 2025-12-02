@@ -1,8 +1,9 @@
 :PROPERTIES:
 :header-args:clojure: :results output :exports both :eval never-export
 :END:
-#+TITLE: Advent of Code 2025
+#+TITLE: AoC 2025
 #+AUTHOR: Rens Oliemans
+#+DESCRIPTION: My Advent of Code solutions for 2025
 #+OPTIONS: toc:nil ^:t num:nil
 
 #+begin_src clojure :results none :exports none
