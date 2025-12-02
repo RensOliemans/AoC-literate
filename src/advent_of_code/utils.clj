@@ -22,6 +22,11 @@
   [input]
   (str/split input #"\n\n"))
 
+(defn to-csvs
+  "Turn a blob into a seq of comma-separated parts."
+  [input]
+  (str/split input #","))
+
 (defn to-lines
   "Turn a blob or block into a seq of lines"
   [input]
