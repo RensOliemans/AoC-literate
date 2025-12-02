@@ -18,16 +18,30 @@
 
 (defn part-1
   "Day 02 Part 1"
-  [input]
-  (->> input
-       to-ranges
-       (map (fn [[start end]] (range start end)))
-       flatten
-       (filter invalid?)
-       (reduce +)))
+  ([input] (part-1 input invalid?))
+  ([input invalid-fn?]
+   (->> input
+        to-ranges
+        (map (fn [[start end]] (range start (inc end))))
+        flatten
+        (filter invalid-fn?)
+        (reduce +))))
+
+(defn- any-invalid?
+  [n]
+  (let [ns (str n)
+        c (count ns)
+        ;; given an input "abc", parts will be ("a" "ab" "abc")
+        parts (rest (reductions str "" ns))
+        part-invalid? (fn [part]
+                        (let [pc (count part)]
+                          (and (= 0 (mod c pc))
+                               (< pc c)
+                               (= ns (apply str (repeat (/ c pc) part))))))]
+    (some part-invalid? parts)))
 
 
 (defn part-2
   "Day 02 Part 2"
   [input]
-  "Implement this part")
+  (part-1 input any-invalid?))
