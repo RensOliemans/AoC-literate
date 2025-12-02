@@ -19,15 +19,15 @@
              ~@body))
   )
 
-(defn input-year
-  [year]
-  (defn load-input [day]
-    (read-input (format "%s/day%02d.txt" year day))))
-
 (defn read-input
   "Read in the content of the given day-file and return as a blob"
   [day]
   (slurp (if (str/starts-with? day "/") day (io/resource day))))
+
+(defn input-year
+  [year]
+  (defn load-input [day]
+    (read-input (format "%s/day%02d.txt" year day))))
 
 (defn to-blocks
   "Turn a blob (probably from `slurp`) into a seq of blocks"
