@@ -123,33 +123,31 @@ And simply match it more often for Part 2
 
 * [[https://adventofcode.com/2025/day/3][Day 3: Lobby]]
 ** Part 1
+I stole [[https://github.com/Michael-Janssen-dev/aoc-2025-gleam/blob/main/src/aoc_2025/day_3.gleam][Mikkels idea]], which is simple but I totally missed it [[https://codeberg.org/RensOliemans/AoC-literate/commit/e06b7ae731fc1202ee2c440c7c149e6c187a8cc9][in my first attempt]]. If $n$ is the desired amount of batteries ($2$ for Part 1), and $i$ is the amount of batteries you have already included, you should not look at the last $k = n-i$ numbers, because otherwise you run out of space. See =(drop-last (dec k))=
+
+When looking at all batteries except the last $k$ elements, you can just take the maximum number (because you know it will /always/ fit, since you're keeping $k$ left out) as your first number. Now you remove that and possibly any lower numbers (=->> current (drop-while #(< % max)) rest=), and repeat for the second, third, fourth digit, etc.
+
 #+begin_src clojure
-  (defn- highest-value [line n]
-    (let [c (count line)
-          [sequence _]
-          (reduce
-           (fn [[current i] following]
-             (loop [j 0]
-               (if (>= j (count current))
-                 (if (> n j)
-                   [(conj current following) (inc i)]
-                   [current (inc i)])
-                 (if (and (> following (nth current j))
-                          (<= (- n (inc j)) (- c (inc i))))
-                   [(conj (vec (take j current)) following) (inc i)]
-                   (recur (inc j))))))
-           [[(first line)] 1]
-           (rest line))]
-      (->> sequence
-           str/join
-           Long/parseLong)))
+  (defn- result [line n]
+    (last
+     (reduce
+      (fn [[current val] k]
+        (let [max (->> current
+                       (drop-last (dec k))
+                       (apply max))
+              new-bank (->> current
+                            (drop-while #(< % max))
+                            rest)]
+          [new-bank (+ max (* 10 val))]))
+      [line 0]
+      (range n 0 -1))))
 
   (defn- solve [input n]
     (->> input
          u/to-lines
          (map #(re-seq #"\d" %))
          (map #(map parse-long %))
-         (map #(highest-value % n))
+         (pmap #(result % n))
          (reduce +)))
 
   (u/part "1" (solve (load-input 3) 2))
@@ -157,7 +155,7 @@ And simply match it more often for Part 2
 
 #+RESULTS:
 : Part 1:  17244
-: "Elapsed time: 18.491415 msecs"
+: "Elapsed time: 9.782281 msecs"
 
 ** Part 2
 #+begin_src clojure
@@ -166,4 +164,4 @@ And simply match it more often for Part 2
 
 #+RESULTS:
 : Part 2:  171435596092638
-: "Elapsed time: 32.53128 msecs"
+: "Elapsed time: 14.749911 msecs"
