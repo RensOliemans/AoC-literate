@@ -11,7 +11,7 @@
     (:require [advent-of-code.utils :as u]))
 #+end_src
 
-* Day 1
+* [[https://adventofcode.com/2025/day/1][Day 1: Secret Entrance]]
 :PROPERTIES:
 :CUSTOM_ID: day1
 :END:
@@ -77,7 +77,7 @@ Thinking a bit about this, we can divide both =from= and =to= by =100= and take 
 : Part 2:  5815
 : "Elapsed time: 132.196553 msecs"
 
-* Day 2
+* [[https://adventofcode.com/2025/day/2][Day 2: Gift Shop]]
 :PROPERTIES:
 :CUSTOM_ID: day2
 :END:
@@ -121,3 +121,49 @@ And simply match it more often for Part 2
 : Part 2:  22471660255
 : "Elapsed time: 448.995817 msecs"
 
+* [[https://adventofcode.com/2025/day/3][Day 3: Lobby]]
+** Part 1
+#+begin_src clojure
+  (defn- highest-value [line n]
+    (let [c (count line)
+          [sequence _]
+          (reduce
+           (fn [[current i] following]
+             (loop [j 0]
+               (if (>= j (count current))
+                 (if (> n j)
+                   [(conj current following) (inc i)]
+                   [current (inc i)])
+                 (if (and (> following (nth current j))
+                          (<= (- n (inc j)) (- c (inc i))))
+                   [(conj (vec (take j current)) following) (inc i)]
+                   (recur (inc j))))))
+           [[(first line)] 1]
+           (rest line))]
+      (->> sequence
+           str/join
+           Long/parseLong)))
+
+  (defn- solve [input n]
+    (->> input
+         u/to-lines
+         (map #(re-seq #"\d" %))
+         (map #(map parse-long %))
+         (map #(highest-value % n))
+         (reduce +)))
+
+  (u/part "1" (solve (load-input 3) 2))
+#+end_src
+
+#+RESULTS:
+: Part 1:  17244
+: "Elapsed time: 18.491415 msecs"
+
+** Part 2
+#+begin_src clojure
+  (u/part "2" (solve (load-input 3) 12))
+#+end_src
+
+#+RESULTS:
+: Part 2:  171435596092638
+: "Elapsed time: 32.53128 msecs"
